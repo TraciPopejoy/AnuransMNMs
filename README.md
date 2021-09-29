@@ -21,7 +21,7 @@ Code is currently in draft form and preliminary.
 
 -------------------------------
 
-#Scripts  
+# Scripts  
 in order from most used to least, currently
 
 organizing_phyio_data.R - code to join all individual species googlesheets together, visualize missing traits, and consolidate / organize the reference list.
