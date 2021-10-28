@@ -1,13 +1,50 @@
 # Quantifying results of Anuran Physiological Trait Database Search
+library(tidyverse)
 
 trait_db_raw<-read_csv('denormalized_trait_db.csv')
 refs <- read_csv('ATraiU 2.0/Reference_List.csv')
 
-# Summary Stats ---
+# Summary Stats ----
+nrow(trait_db_raw)
+
+trait_db_raw %>% left_join(refs, by=c(`Source file name`='Source.file.name')) %>%
+  pull(group_id) %>% unique() %>% length()
+# most traits
+trait_db_raw %>%
+  filter(type=='concentrated') %>%
+  group_by(species, Trait) %>%
+  slice(1) %>%
+  group_by(Trait) %>%
+  tally() %>% arrange(desc(n))
+
+# most categories in concentrated results
+trait_db_raw %>%
+  filter(type=='concentrated') %>%
+  distinct(species, Trait,  .keep_all=T) %>%
+  group_by(species) %>%
+  tally() %>% ungroup() %>%
+  arrange(desc(n))%>%
+  slice(1:3, (n()-6):n())
+
+trait_db_raw %>%
+  filter(species %in% c('Pseudacris fouquettei','Pseudacris brimleyi',
+                        'Pseudacris ocularis', 'Pseudacris brachyphona',
+                        'Lithobates capito')) %>% 
+  View()
+
+trait_db_raw %>%
+  filter(type=='concentrated') %>%
+  group_by(species, Trait, `Life Stage`) %>%
+  slice(1) %>%
+  group_by(Trait, `Life Stage`) %>%
+  tally() %>%
+  pivot_wider(names_from=`Life Stage`, values_from=n)
+
 # number of 
 nrow(trait_db_raw)
 trait_db_raw %>%
   mutate(new_ls=ifelse(grepl('gosner',`Life Stage`), 'tadpole',`Life Stage`)) %>%
+  filter(is.na(new_ls)) %>% View()
   count(new_ls) %>% arrange(desc(n))
 length(unique(trait_db_raw$species)) #through haphazard search
 foc_taxa<-trait_db_raw %>%
@@ -16,7 +53,7 @@ foc_taxa<-trait_db_raw %>%
 length(foc_taxa)
 trait_db_raw %>%
   filter(species %in% foc_taxa) %>%
-  group_by(species, Trait) %>% slice(1) %>%
+  group_by(species, Trait) %>% slice(1) %>% View()
   group_by(species) %>% count() %>%
   ggplot()+geom_histogram(aes(x=n), binwidth=1)+
   scale_x_continuous('n Traits per species', 

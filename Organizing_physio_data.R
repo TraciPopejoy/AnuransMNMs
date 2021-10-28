@@ -1,7 +1,7 @@
 library(tidyverse);library(googlesheets4); library(googledrive)
 
 # Bring in the results of our concentrated physiological search ----
-sp_files<-drive_find(team_drive = "Anuran Physiological Trait Search", 
+sp_files<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
            pattern="MNM traits")
 1
 # number of species in concentrated search
@@ -24,10 +24,19 @@ all_trait_shts <- all_trait_shts %>%
   mutate(across(everything()), na_if(.,"N/A")) %>%
   mutate(across(everything()), na_if(.,"n/a"))
 
+#remove traits we are not interested in, but were collected before
+#and rows that have no value associated with them
+unique(all_trait_shts$Trait)[-c(7,11:16)]
+all_trait_shts_mod<-all_trait_shts %>%
+  filter(Trait %in% unique(all_trait_shts$Trait)[-c(8,11:16)],
+         !is.na(Value),
+         `Source file name` != 'Animal Diversity Web') 
+View(all_trait_shts_mod)
+
 # Bring in miscellaneous traits collected ----
-FB_sheet<-drive_find(team_drive = "Anuran Physiological Trait Search", 
+FB_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
                      pattern="Parameters")
-misc_sheet<-drive_find(team_drive = "Anuran Physiological Trait Search", 
+misc_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
            pattern="Misc")
 FB_trait_data<-read_sheet(FB_sheet$id, sheet="Table 9.2", col_types='c') %>%
    mutate(Trait='Tpref', Units='C') %>%
@@ -43,6 +52,9 @@ write_csv(misc_trait_data, paste0('raw_data/RAW_misc_trait_values',
 
 library(rgbif)
 anura_tax<-unique(c(misc_trait_data$Species_orig, FB_trait_data$Taxa, all_trait_shts$taxa))
+#known bad species
+#"Anaxyrus valliceps" "Rana palustris"     "Hyla saufferi"      "Hyla sp."           "Hypopachus sp."    
+#"Rana hedscheri"     "Hyla raddiana"  
 anuran.gbif.taxa<-NULL
 for(u in anura_tax){
   anuran.gbif.taxa1<-name_backbone(name=u, 
@@ -54,7 +66,6 @@ View(anuran.gbif.taxa)
 # TODO check taxa for spelling mistakes
 taxa_key<- anuran.gbif.taxa %>%
   select(Taxa, canonicalName, family, genus, species)
-
 
 # Build Reference List ----
 # identify ones with doi and cross reference
@@ -89,21 +100,26 @@ refs<-read.csv('References_20210817.csv') %>%
 View(refs)
 
 write_csv(refs, 'ATraiU 2.0/Reference_List.csv')
+
 # Final Collation ----
 #long data base - taxa, trait, value, source name, source number, other accompanying info
 #references - year, citation, source name, source number
 # Combine all trait information
-trait_db_raw<-all_trait_shts %>%
-  filter(!is.na(Value)) %>%
+trait_db_raw<-all_trait_shts_mod %>%
   rename(Taxa=taxa) %>%
   mutate(type='concentrated') %>%
   bind_rows(FB_trait_data %>% mutate(type='haphazard'),
             misc_trait_data %>% rename(Taxa=Species_orig) %>% mutate(type='haphazard')) %>%
   left_join(taxa_key) %>%
+  # clean up the text
   mutate(Trait=recode(Trait, "Standard Metabolic Rate"="Metabolic Rate",
-                      "Cutaneous Water Loss Rate"="Water Loss Rate")) %>%
-  select(Taxa, species, Trait, everything()) 
+                      "Cutaneous Water Loss Rate"="Water Loss Rate"),
+         `Life Stage`=recode(`Life Stage`, 'juveniles' = 'juvenile', 
+                             'unkown'='unknown', 'tapdole'='tadpole')) %>%
+  select(Taxa, species, Trait, everything())  
 write_csv(trait_db_raw, 'raw_data/combined_trait_data.csv')
+
+refs<-read.csv('ATraiU 2.0/Reference_List.csv')
 
 trait_db_raw %>%
   arrange(type) %>%
@@ -113,5 +129,72 @@ trait_db_raw %>%
   left_join(refs, by=c(`Source file name`="Source.file.name")) %>%
   write_csv('denormalized_trait_db.csv')
 
-trait_db_raw %>%
-  select(-Taxa, -`Search Terms Used`, -canonicalName, -doi, -first_author, -year)
+trait_long<-trait_db_raw %>%
+  left_join(refs, by=c(`Source file name`="Source.file.name")) %>% 
+  select(-Taxa, -`Search Terms Used`, -DOI, -Notes, -page,-order,-Season,
+         -rechecked,-doi, -citation,-journal,-issue, -year,-second_author,
+         -canonicalName,  -ends_with('author')) %>%
+  rename(RefID=group_id)
+
+# species x trait summary matrix 
+#need to seperate character traits and convert to binary matrix (n records?)
+# then cbind with averaged? other traits
+unique(trait_long$Trait)
+#character traits
+tchar<-trait_long %>%
+  group_by(species, `Life Stage`, Trait) %>%
+  filter(Trait == 'Activity') %>%
+  mutate(record=1,
+         activity=tolower(recode(Value, 
+                                 'nocturnal and diurnal'='diurnal, nocturnal')))%>%
+  dplyr::select(family, genus, species, RefID, `Source file name`, activity, record) %>%
+  pivot_wider(names_from=activity, values_from=record) %>%
+  mutate(nocturnal=case_when(!is.na(`diurnal, nocturnal`)~ 1,
+                             T~nocturnal),
+         diurnal=case_when(!is.na(`diurnal, nocturnal`)~1,
+                           T~diurnal)) %>%
+  group_by(species) %>%
+  select(-'diurnal, nocturnal') %>%
+  summarize(across('nocturnal':'arrhythmic', sum, na.rm=T)) %>%
+  mutate(`Life Stage`='adult')
+
+tbif<-trait_long %>%
+  group_by(species, `Life Stage`, Trait) %>%
+  filter(!(Trait %in% c("Activity","Water Loss Rate",
+                        "Minimum Egg Development Temperature",
+                        "Maximum Egg Development Temperature",
+                        "Metabolic Rate"))) %>%
+  mutate(v_n=as.numeric(Value)) %>%
+  select(species, `Life Stage`, RefID, Trait, Value, v_n) %>%
+  pivot_wider(names_from=Trait, values_from = v_n, values_fn=mean) %>%
+  group_by(species, `Life Stage`) %>%
+  summarize(RefIDs=paste(RefID, collapse=', '),
+            Mass=mean(Mass,na.rm=T),
+            CTmax=max(CTmax, na.rm=T), CTmin=min(CTmin, na.rm=T), 
+            Tpref=mean(Tpref, na.rm=T), Tbask=mean(Tbask, na.rm=T), Tforage_optim=mean(Tforage_optim, na.rm=T),
+            Tforage_max=max(Tforage_max, na.rm=T),   Tforage_min=min(Tforage_min, na.rm=T), 
+            Tmerge=min(Tmerge, na.rm=T)) 
+View(tbif)
+  
+trait_long %>% filter( species == "Lithobates sphenocephalus")
+tbif$Units %>% unique()
+
+left_join(tchar, mean_mass)
+
+
+#Table 1----
+
+trait_long %>%
+  group_by(species, Trait) %>%
+  filter(`Life Stage`=='adult',
+         !is.na(Value)) %>%
+  slice(1) %>%
+  group_by(species) %>%  count() %>%
+  right_join(anuran.gbif.taxa %>%
+               filter(species %in% gsub(' MNM traits', '', sp_files$name)) %>%
+               select(family, genus, species) %>%
+               group_by(species) %>% slice(1)) %>%
+  select(family, genus, species, n) %>%
+  arrange(family) %>%
+  write.csv('AT2_fig/table_1_211028.csv', row.names = F)
+  
