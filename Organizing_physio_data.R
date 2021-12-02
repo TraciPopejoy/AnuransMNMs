@@ -147,6 +147,7 @@ tchar<-trait_long %>%
   mutate(record=1,
          activity=tolower(recode(Value, 
                                  'nocturnal and diurnal'='diurnal, nocturnal')))%>%
+  ungroup() %>%
   dplyr::select(family, genus, species, RefID, `Source file name`, activity, record) %>%
   pivot_wider(names_from=activity, values_from=record) %>%
   mutate(nocturnal=case_when(!is.na(`diurnal, nocturnal`)~ 1,
@@ -155,32 +156,45 @@ tchar<-trait_long %>%
                            T~diurnal)) %>%
   group_by(species) %>%
   select(-'diurnal, nocturnal') %>%
-  summarize(across('nocturnal':'arrhythmic', sum, na.rm=T)) %>%
+  summarize(RefIDs_a=paste(unique(RefID), collapse=', '),
+            across('nocturnal':'arrhythmic', sum, na.rm=T)) %>%
   mutate(`Life Stage`='adult')
 
 tbif<-trait_long %>%
+  mutate(`Life Stage` = case_when(grepl('gosner', `Life Stage`) ~ 'tadpole',
+                                  `Life Stage`=='unknown' ~ 'adult',
+                                  T ~ `Life Stage`)) %>%
   group_by(species, `Life Stage`, Trait) %>%
   filter(!(Trait %in% c("Activity","Water Loss Rate",
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
-                        "Metabolic Rate"))) %>%
+                        "Metabolic Rate")),
+         `Life Stage`=='adult') %>%
   mutate(v_n=as.numeric(Value)) %>%
   select(species, `Life Stage`, RefID, Trait, Value, v_n) %>%
   pivot_wider(names_from=Trait, values_from = v_n, values_fn=mean) %>%
   group_by(species, `Life Stage`) %>%
-  summarize(RefIDs=paste(RefID, collapse=', '),
-            Mass=mean(Mass,na.rm=T),
-            CTmax=max(CTmax, na.rm=T), CTmin=min(CTmin, na.rm=T), 
-            Tpref=mean(Tpref, na.rm=T), Tbask=mean(Tbask, na.rm=T), Tforage_optim=mean(Tforage_optim, na.rm=T),
-            Tforage_max=max(Tforage_max, na.rm=T),   Tforage_min=min(Tforage_min, na.rm=T), 
-            Tmerge=min(Tmerge, na.rm=T)) 
+  summarize(RefIDs_n=paste(unique(RefID), collapse=', '),
+            Mass=ifelse(!all(is.na(Mass)), mean(Mass,na.rm=T), NA),
+            CTmax=ifelse(!all(is.na(CTmax)), max(CTmax, na.rm=T), NA),
+            CTmin=ifelse(!all(is.na(CTmin)), min(CTmin, na.rm=T), NA), 
+            Tpref=ifelse(!all(is.na(Tpref)), mean(Tpref, na.rm=T),  NA),
+            Tbask=ifelse(!all(is.na(Tbask)), mean(Tbask, na.rm=T),  NA),
+            Tforage_optim=ifelse(!all(is.na(Tforage_optim)), mean(Tforage_optim, na.rm=T), NA),
+            Tforage_max=ifelse(!all(is.na(Tforage_max)), max(Tforage_max, na.rm=T), NA),  
+            Tforage_min=ifelse(!all(is.na(Tforage_min)), min(Tforage_min, na.rm=T), NA), 
+            Tmerge=ifelse(!all(is.na(Tmerge)), min(Tmerge, na.rm=T), NA))
+# warnings are from Tmerge == overwinters
 View(tbif)
   
-trait_long %>% filter( species == "Lithobates sphenocephalus")
+trait_long %>% filter( species == "Lithobates sphenocephalus", grepl('gosner', `Life Stage`))
 tbif$Units %>% unique()
 
-left_join(tchar, mean_mass)
-
+full_join(tchar, tbif, by=c('species','Life Stage')) %>%
+  mutate(RefIDs=paste(RefIDs_n, RefIDs_a, sep=', ')) %>%
+  select(-RefIDs_a, -RefIDs_n, -`Life Stage`) %>%
+  select(species, everything()) %>%
+  write.csv('ATraiU2_summary_values_2021NOV.csv')
 
 #Table 1----
 

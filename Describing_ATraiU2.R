@@ -7,8 +7,8 @@ refs <- read_csv('ATraiU 2.0/Reference_List.csv')
 # Summary Stats ----
 nrow(trait_db_raw)
 
-trait_db_raw %>% left_join(refs, by=c(`Source file name`='Source.file.name')) %>%
-  pull(group_id) %>% unique() %>% length()
+trait_db_raw %>% pull(group_id) %>% unique() %>% length()
+
 # most traits
 trait_db_raw %>%
   filter(type=='concentrated') %>%
