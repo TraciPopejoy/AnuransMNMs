@@ -1,7 +1,7 @@
 # Quantifying results of Anuran Physiological Trait Database Search
 library(tidyverse)
 
-trait_long<-read_csv('ATraiU 2.0/ATraiU2_full_2022JAN.csv') %>%
+trait_long<-read_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv') %>%
   filter(!(traitName %in% c("Water Loss Rate",
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
@@ -30,6 +30,7 @@ rcs<-read_csv('../National-RCS/rcs_results/Anuran RCS values 20211215.csv') %>%
   filter(grepl('entire', spatial_extent)) %>%
   select(species, orig.nrow, watershed, log10_WS_sqkm)
 foc_taxa<-gsub(' MNM traits','', sp_files$name)
+foc_taxa<-foc_taxa[foc_taxa!='Pseudacris maculata']
 #rank geo rarity for table 2
 rcs %>% filter(species %in% foc_taxa) %>% 
   mutate(rankgeo=rank(watershed)) %>%
@@ -110,9 +111,8 @@ trait_total %>% filter(species %in% sp_concon)
 max(trait_total$n)
 
 ?binom.test
-binom.test(4,9)
-binom.test(2,9)
-
+binom.test(4,8)
+binom.test(2,8)
 
 trait_count_rarity %>%
   ggplot()+
@@ -132,6 +132,7 @@ trait_count_rarity %>%
 # Comparisons among groups ----
 #species with no traits
 # data frame of n traits for each of our focal taxa
+taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022JAN.csv')
 trait_count_rarity<-data.frame(species=foc_taxa) %>%
   filter(!(species %in% trait_total$species)) %>%
   mutate(n=0)%>%
@@ -305,6 +306,16 @@ ggsave('ATraiU 2.0/manuscript/trait_aoo_correlation.jpg', width=4.75, height=2.5
 trait_ls_total %>% filter(n_ls > 2) %>% select(-orig.nrow)
 trait_ls_total %>% filter(n_ls <= 2) %>% select(-orig.nrow, log10_WS_sqkm)
 trait_ls_total %>% filter(grepl('T', total_ls)) %>% nrow()
+
+trait_long %>% filter(species %in% foc_taxa) %>%
+  count(species) %>% summarize(min_traits=min(n),n=n())
+trait_long %>% filter(species %in% foc_taxa) %>%
+  count(species) %>% filter(n==min(n))
+
+
+#### OLD CODE #####
+
+
 # number of 
 nrow(trait_long)
 trait_long %>%
@@ -327,7 +338,7 @@ tr_sp_con %>%
                       breaks=1:11)+
   scale_y_continuous('N species', expand=c(0,0))+
   theme_minimal()
-ggsave('AT2_fig/trait_per_sp_conc.jpeg', width=2.5, height=2.5)
+ggsave('ATraiU 2.0/manuscript/trait_per_sp_conc.jpeg', width=2.5, height=2.5)
 
 trait_order<-trait_long %>%
   group_by(species, traitName) %>% slice(1) %>%
@@ -352,7 +363,7 @@ trait_long %>%
   labs(x='Traits',y='Species')+
   theme(axis.text = element_text(size=9))+
   coord_flip()
-ggsave('AT2_fig/trait_distribution.jpg', width=2.5, height=2.5)
+ggsave('ATraiU 2.0/manuscript/trait_distribution.jpg', width=2.5, height=2.5)
 
 trait_long %>% group_by(species, traitName) %>% slice(1) %>% ungroup() %>% count(dataCollationType)
 

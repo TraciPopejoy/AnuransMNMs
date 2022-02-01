@@ -110,7 +110,8 @@ write_csv(refs, 'ATraiU 2.0/ATraiU2_reference_list_2022JAN.csv')
 # Combine all trait information
 trait_db_raw<-all_trait_shts_mod %>%
   rename(dataScientificName=taxa) %>%
-  mutate(dataCollationType='concentrated') %>%
+  mutate(dataCollationType=ifelse(dataScientificName == 'Pseudacris maculata',
+                                  'haphazard', 'concentrated')) %>%
   bind_rows(FB_trait_data %>% 
               rename(dataScientificName=Taxa) %>% 
               mutate(dataCollationType='haphazard'),
@@ -172,8 +173,6 @@ trait_long %>% filter(is.na(refID)) %>% View()
 
 trait_long<-trait_long %>% 
   filter(!is.na(refID)) #removing traits from websites
-
-write_csv(trait_long, 'ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv')
 
 # species x trait summary matrix 
 #need to seperate character traits and convert to matrix of n records
@@ -252,14 +251,16 @@ trait_long %>%
 
 
 # Outlier Analysis for QA/QC -----
-# all taxa for each trait
+outliers<-bind_rows(
+  # all taxa for each trait
 trait_long %>%
   filter(traitName != 'Activity') %>%
   group_by(traitName, lifeStage) %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
   select(species, traitName, traitValue, tV, z_score, traitSource) %>%
-  filter(abs(z_score) > 2.45)
+  filter(abs(z_score) > 2.49) %>%
+  mutate(outlier = 'trait'),
 # at the family level
 trait_long %>%
   filter(traitName != 'Activity') %>%
@@ -267,7 +268,8 @@ trait_long %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
   select(species, traitName, traitValue, tV, z_score, traitSource) %>%
-  filter(abs(z_score) > 2.45)
+  filter(abs(z_score) > 2.49) %>% ungroup() %>%
+  mutate(outlier = 'family'),
 # at the genus level
 trait_long %>%
   filter(traitName != 'Activity') %>%
@@ -275,7 +277,8 @@ trait_long %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
   select(species, traitName, traitValue, tV, z_score, traitSource) %>%
-  filter(abs(z_score) > 2.45)
+  filter(abs(z_score) > 2.49) %>% ungroup() %>%
+  mutate(outlier = 'genus'),
 # at the species level
 trait_long %>%
   filter(traitName != 'Activity') %>%
@@ -283,5 +286,23 @@ trait_long %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
   select(species, traitName, traitValue, tV, z_score, traitSource) %>%
-  filter(abs(z_score) > 2)
+  filter(abs(z_score) > 2.49) %>%
+  mutate(outlier = 'species'))
+View(outliers %>%
+       group_by(species, traitName, traitValue) %>%
+       summarize(z=paste(round(z_score,1), collapse=', '),
+                 outs=paste(outlier, collapse=', '),
+                 source=paste(unique(traitSource), collapse=', ')))
+nrow(outliers %>% distinct(species, traitName, traitValue))
+nrow(outliers %>% distinct(species, traitName, traitValue))/ nrow(trait_long %>% filter(traitName !='Activity'))*100
+# checked each value was transcribed correctly
+
+trait_long %>%
+  # bringing in the outliers flag
+  left_join(outliers %>%
+              group_by(species, traitName, traitValue) %>%
+              summarize(outlier=paste(outlier, collapse=', ')), .groups='drop') %>%
+  
+  write_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv')
+
 
