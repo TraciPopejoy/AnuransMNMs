@@ -1,5 +1,5 @@
 # Quantifying results of Anuran Physiological Trait Database Search
-library(tidyverse)
+library(tidyverse); library(cowplot); library(grid)
 
 trait_long<-read_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv') %>%
   filter(!(traitName %in% c("Water Loss Rate",
@@ -114,6 +114,129 @@ max(trait_total$n)
 binom.test(4,8)
 binom.test(2,8)
 
+# Summary Figure ----
+trait_order<-trait_long %>%
+  filter(species %in% foc_taxa) %>%
+  group_by(species, traitName) %>% slice(1) %>%
+  group_by(traitName) %>% count() %>%
+  arrange(desc(n)) %>%
+  pull(traitName)
+oc<-trait_long %>%
+  filter(species %in% foc_taxa,
+         traitName != 'Tforage_optim') %>%
+  group_by(species, family, traitName, refID) %>%
+  slice(1) %>%
+  group_by(species, family, traitName) %>%
+  summarize(n=n(),
+         refss=paste(refID, collapse=', '),
+         FamI=substr(family,1,1),
+         TraF=factor(traitName, levels=trait_order,
+                     labels=c('Activity','Mass',
+                              expression(T[pref]),
+                              'CT[max]',
+                              'CT[min]',
+                              'Tmerge',
+                              'Tforage[max]',
+                              'Tforage[min]',
+                              'T[bask]',
+                              'Tforage[optim]')),
+         Taxa=ifelse(species %in% sp_concon, paste(species,'*'),species),
+         .groups='drop') %>%
+  ggplot()+
+  geom_tile(aes(x=TraF, y=Taxa, fill=n))+
+  scale_fill_gradientn('Reference\nCount',
+                       colors=met.brewer('Greek'))+
+  scale_x_discrete('Trait Name')+
+  facet_wrap(~FamI, scales='free_y', ncol=1, strip.position = 'left')+
+  theme_cowplot()+
+  theme(strip.placement='outside',
+        strip.background = element_rect(fill=NA),
+        strip.text=element_blank(),#element_text(size=10),
+        #panel.grid.major.y = element_line(color="black"),
+        legend.justification = 'left',
+        axis.text.y=element_text(size=8.5, face='italic'),
+        legend.box.just = 'left',
+        legend.text = element_text(size=8.5),
+        legend.title = element_text(size=9),
+        axis.text.x=element_text(angle=25,hjust=.92,size=8.5),
+        axis.title.y = element_blank(),
+        axis.title.x=element_text(size=9),
+        plot.title = element_text(size=10, hjust=0.5))
+ocp = ggplot_gtable(ggplot_build(oc))
+#gtable::gtable_show_layout(ohp)
+# get the number of unique x-axis values per facet (1 & 3, in this case)
+y.var <- sapply(ggplot_build(oc)$layout$panel_scales_y,
+                function(l) length(l$range$range))
+# change the relative widths of the facet columns based on
+# how many unique x-axis values are in each facet
+ocp$heights[ocp$layout$t[grepl("panel", ocp$layout$name)]] <- ocp$heights[ocp$layout$t[grepl("panel", ocp$layout$name)]] * y.var
+grid.draw(ocp)
+ggsave('ATraiU 2.0/manuscript/summary_figure.jpg',
+       width = 3.5, height = 5)
+library(maps);library(sf)
+states<-st_as_sf(map('state', fill=T))
+usa<-st_as_sf(map('usa', fill=T))
+SE_states<-c('mississippi', 'georgia',
+             'florida','south carolina', 'north carolina', 'virginia',
+             'alabama', 'tennessee')
+se_inset<-ggplot()+
+  geom_sf(data=usa, fill='white')+
+  geom_sf(data=states %>% filter(ID %in% SE_states),
+          fill='lightgrey', color='lightgrey')+
+  theme_void()
+
+trait_ref_ndf<-trait_long %>%
+  filter(species %in% foc_taxa,
+         traitName != 'Tforage_optim') %>%
+  group_by(species, family, traitName, refID) %>%
+  slice(1) %>%
+  group_by(species, family, traitName) %>%
+  summarize(n=n(),
+            refss=paste(refID, collapse=', '),
+            Taxa=ifelse(species %in% sp_concon, paste0(species,'*'),species),
+            .groups='drop')  %>%
+  distinct(.keep_all = T)
+tax_ref_ord<-trait_ref_ndf %>%
+  group_by(Taxa) %>% summarize(tn=sum(n)) %>%
+  arrange(desc(tn)) %>%
+  pull(Taxa)
+trait_ref_ndf %>%
+  mutate(TaxF=factor(Taxa, levels=rev(tax_ref_ord)),
+         TraitF=factor(traitName, 
+                       levels=c('Mass','CTmax','CTmin','Tpref',
+                                'Tbask','Tforage_min','Tforage_max',
+                                'Tmerge','Activity'))) %>%
+  ggplot()+
+  geom_col(aes(y=TaxF, x=n, fill=TraitF), position='stack')+
+  draw_plot(se_inset, x=15, y=10.5, scale=10)+
+  labs(y='',x='Reference count')+
+  scale_fill_manual('Trait Name', values=met.brewer('Hiroshige'))+
+  scale_x_continuous(breaks=c(0,3,6,9,12,15,18))+
+  theme_classic()+
+  theme(legend.position=c(.735,.20), 
+        legend.text=element_text(size=9),
+        legend.title=element_text(size=9),
+        legend.key.size = unit(1, "lines"),
+        #legend.background = element_rect(fill=NA),
+        axis.text.y = element_text(face='italic'),
+        axis.title.y=element_blank(),
+        panel.grid.major.x = element_line(color='grey90'))
+
+ggsave('ATraiU 2.0/manuscript/summary_figure_nref.jpg',
+       width=3.5, height=6)
+
+# Comparisons among groups ----
+#species with no traits
+# data frame of n traits for each of our focal taxa
+taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022JAN.csv')
+trait_count_rarity<-data.frame(species=foc_taxa) %>%
+  filter(!(species %in% trait_total$species)) %>%
+  mutate(n=0)%>%
+  bind_rows(trait_total) %>%
+  left_join(rcs) %>%
+  left_join(taxa_key %>% distinct(species, .keep_all=T))
+nrow(trait_count_rarity)
+
 trait_count_rarity %>%
   ggplot()+
   geom_histogram(aes(x=n), binwidth = 1)+
@@ -128,18 +251,6 @@ trait_count_rarity %>%
                      expand = c(0,0))+
   scale_y_continuous('N species')+
   theme_classic()
-
-# Comparisons among groups ----
-#species with no traits
-# data frame of n traits for each of our focal taxa
-taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022JAN.csv')
-trait_count_rarity<-data.frame(species=foc_taxa) %>%
-  filter(!(species %in% trait_total$species)) %>%
-  mutate(n=0)%>%
-  bind_rows(trait_total) %>%
-  left_join(rcs) %>%
-  left_join(taxa_key %>% distinct(species, .keep_all=T))
-nrow(trait_count_rarity)
 
 # taxonomic comparisons ---
 set.seed(12345)
