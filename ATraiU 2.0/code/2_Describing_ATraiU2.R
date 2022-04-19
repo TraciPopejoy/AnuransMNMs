@@ -14,6 +14,8 @@ nrow(trait_long)
 trait_long %>% pull(refID) %>% unique() %>% length()
 trait_long %>% filter(dataCollationType=='concentrated') %>%
   pull(refID) %>% unique() %>% length()
+trait_long %>% filter(species %in% foc_taxa) %>%
+  pull(refID) %>% unique() %>% length()
 
 trait_long %>% filter(dataCollationType=='concentrated') %>% nrow()
 
