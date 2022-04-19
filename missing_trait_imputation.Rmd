@@ -2,7 +2,7 @@
 title: "missing_traits"
 author: "TP DuBose"
 date: "1/19/2022"
-output: slidy_presentation
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -13,35 +13,36 @@ knitr::opts_chunk$set(echo = FALSE)
 
 ## Trait Imputation Methods
 
-[Penone et al. 2014](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12232) reviewed some imputation methods and [Johnson et al. 2021](https://onlinelibrary.wiley.com/doi/full/10.1111/geb.13185) addressed how bias affects those top methods. 
+[Penone et al. 2014](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12232) reviewed imputation methods and [Johnson et al. 2021](https://onlinelibrary.wiley.com/doi/full/10.1111/geb.13185) addressed how bias affects the top methods. 
 
-Generally, using phylogentic information reduces error but bias in leads to different methods being *best*.
+Generally, using phylogentic information reduces error but bias in trait completeness leads to different methods being *best*.
 
-## Bias in our trait dataset
+#### Bias in our trait dataset
 
-```{r atraiu2, echo=F, warning=F, message=F}
-trait_db_raw<-read_csv('ATraiU 2.0/intermediate_results/denormalized_trait_db.csv') %>%
+```{r atraiu2, echo=F, warning=F, message=F, fig.width=4.5,fig.height=4}
+trait_db_raw<-read_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv') %>%
   filter(!(traitName %in% c("Maximum Egg Development Temperature",
                         "Minimum Egg Development Temperature",
                         "Standard Metabolic Rate",
                         "VTmax","VTmin","Water Loss Rate",
                         "Cutaneous Water Loss Rate",
                         "Thermal Perfomance Curve",
-                        "Metabolic Rate"))) 
-tax_ord<-trait_db_raw %>% filter(dataCollationType=='concentrated') %>%
-  mutate(lifeStage = case_when(grepl('gosner',
-                                        lifeStage) ~ 'tadpole',
-                                  lifeStage=='unknown' ~ 'adult',
-                                  T ~ lifeStage)) %>%
-  distinct(species, traitName, lifeStage, .keep_all=T) %>%
+                        "Metabolic Rate")),
+         lifeStage %in% c('adult','unknown')) 
+foc_taxa<-trait_db_raw %>% filter(dataCollationType=='concentrated') %>%
+  pull(species) %>% unique()
+tax_ord<-trait_db_raw %>% 
+  filter(species %in% foc_taxa,
+         lifeStage %in% c('adult', 'unknown')) %>%
+  distinct(species, traitName, .keep_all=T) %>%
   group_by(species) %>%
   tally() %>% ungroup() %>%
   arrange(desc(n)) %>% pull(species)
-trait_ord<-trait_db_raw %>% filter(dataCollationType=='concentrated') %>%
-   group_by(species, traitName) %>%
-  slice(1) %>%
-  group_by(traitName) %>%
-  tally() %>% arrange(desc(n)) %>% pull(traitName) 
+trait_ord<-trait_db_raw %>% 
+  filter(species %in% tax_ord) %>%
+  distinct(species, traitName) %>%
+  count(traitName) %>% 
+  arrange(desc(n)) %>% pull(traitName) 
 
 trait_db_raw %>%
   group_by(species, traitName) %>%
@@ -58,17 +59,17 @@ trait_db_raw %>%
   select(-traitName) %>%
   pivot_longer(-TraitF) %>%
   mutate(taxaF=factor(name, 
-                      levels=tax_ord)) %>%
+                      levels=tax_ord)) %>% 
   ggplot()+
   geom_tile(aes(x=TraitF, y=taxaF, fill=as.factor(value))) +
-  geom_rect(aes(xmin=0.5,xmax=6.5, ymin=0.5, ymax=21.5), 
+  geom_rect(aes(xmin=0.5,xmax=6.5, ymin=0.5, ymax=20.5), 
             color='red', fill=NA)+
   scale_fill_manual(values=c(NA,'black'), name='Trait Available',
                     labels=c('no', 'yes'))+
   scale_y_discrete(name="Taxa")+
   theme_bw()+
   theme(axis.text.x= element_text(angle=40, hjust=.9),
-        legend.position = 'bottom',
+        legend.position = 'top',
         axis.title = element_blank(), 
         axis.text.y=element_text(face='italic'),
         legend.margin=margin(-2,-2,-2,-2),
@@ -82,19 +83,19 @@ trait_complete<-trait_db_raw %>%
   group_by(species) %>% count() %>%
   mutate(comp=n/6)
 ```
-***
-This would give us `r nrow(trait_complete)` species total: `r trait_complete %>% filter(comp > 0.6) %>% nrow()` species with > 60% trait completeness and `r trait_complete %>% filter(comp <= 0.6) %>% nrow()`species below that mark.
 
-# Revisiting how different imputation methods work under different bias
-```{r, echo=FALSE, fig.cap="", out.width = '90%', fig.align='center'}
+This would give us `r nrow(trait_complete)` species total: `r trait_complete %>% filter(comp > 0.6) %>% nrow()` species with > 60% trait completeness and `r trait_complete %>% filter(comp <= 0.6) %>% nrow()` species below that mark.
+
+# Revisiting how different imputation methods work under bias
+```{r, echo=FALSE, fig.cap="", out.width = '90%', out.height='80%', fig.align='center'}
 knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/Johnson2021_error_trait_imputatoin.png")
 ```
 
 # Anuran Phylogeny
 
-I'm using the phylogeny from Jetz & Pyron 2019 to build the following tree for the 29 focal species (to be narrowed down). 
+Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the `r length(tax_ord)` species we have trait information for.
 
-```{r phylogeny, echo = F, out.width='90%'}
+```{r phylogeny, echo = F, fig.height=4.5}
 # import phylogeny from Jetz and Pyron 2019
 tree_orig <- read.tree(file = "amph_shl_new_Consensus_7238.tre") 
 tips<-c(gsub('Dryophytes','Hyla',
@@ -106,28 +107,28 @@ tips<-tips[!(tips %in% c('Hyla_cinereus', 'Hyla_squirellus',
                     'Rana_catesbeianus', 'Hyla_gratiosus',
                     'Rana_areolatus', 'Rana_sylvaticus',
                     #also removing those with little traits
-                    'Pseudacris_nigrita','Pseudacris_ornata', 
-                    'Pseudacris_feriarum'))]
+                    'Pseudacris_nigrita','Pseudacris_ornata'))]#, 
+                    #'Pseudacris_feriarum'))]
 tree.pruned <- keep.tip(phy = tree_orig, 
                         tip = tips) 
-plot(tree.pruned)
+plot(tree.pruned, font=2.5)
 ```
 
 # Use Rphylopars to imput continuous trait data
-```{r pressure, warning=F, message=F, echo=F}
+```{r pressure, warning=F, message=F, echo=F, , out.height='50%'}
 trait_matrix<-trait_db_raw %>%
   filter(species %in% tax_ord,
          !(species %in% c('Pseudacris nigrita',
-                          'Pseudacris ornata',
-                          'Pseudacris feriarum')),
+                          'Pseudacris ornata')),#,
+                          #'Pseudacris feriarum')),
          lifeStage %in% c('adult','unknown'),
          !is.na(traitValue),
          traitName != 'Activity',
          traitName %in% trait_ord[1:6]) %>% 
-  group_by(species, traitName) %>%
+  group_by(species, traitName)%>%
   #filter(species =='Acris gryllus' & Trait =='Tmerge') %>%
   summarize(med_val=median(as.numeric(traitValue)), .groups='drop') %>%
-  pivot_wider(names_from=traitName, values_from=med_val) %>%
+  pivot_wider(names_from=traitName, values_from=med_val)%>%
   mutate(sp_old=recode(species,
                        'Lithobates catesbeianus' = 'Rana_catesbeiana',
                        'Lithobates sylvaticus' = 'Rana_sylvatica',
@@ -140,61 +141,83 @@ trait_matrix<-trait_db_raw %>%
                        'Lithobates grylio' = 'Rana grylio',
                        'Dryophytes squirellus' = 'Hyla_squirella',
                        'Dryophytes gratiosus' = 'Hyla_gratiosa'),
-         tipss=gsub('\ ','_', sp_old))
+         tipss=gsub('\ ','_', sp_old)) %>%
+  bind_rows(data.frame(tipss='Pseudacris_feriarum', species='Pseudacris feriarum'))
 #tree.pruned$tip.label[!(tree.pruned$tip.label %in% trait_matrix$tipss)]
 trait_mat_fin<-data.frame(trait_matrix %>%
-  select(-species, -sp_old) %>% rename(species=tipss) %>%
-  select(species, everything()))
+  dplyr::select(-species, -sp_old) %>% rename(species=tipss) %>%
+  dplyr::select(species, everything()))
 ```
-```{r results, out.width='90%'}
-p_BM <- phylopars(trait_data = trait_mat_fin, tree = tree.pruned)
+We use the following code to impute the traits using the *Rphylopars* package. 
+- estimates phylogenetic and phenotypic variance-covariance matrices 
+- assumes phenotypic covariance is equivalent among species
+- uses a Browning motion model of evolution
+Essentially is a maximum likelihood frequentist way to impute traits
+
+```{r results, echo=T, out.width='60%'}
+p_BM <- phylopars(trait_data = trait_mat_fin, tree = tree.pruned,
+                  phylo_correlated=F)
 ```
-```{r results graph,  out.width='90%', echo=F}
+```{r results graph,  fig.height=4, echo=F}
 #results!
 imp_results<-p_BM$anc_recon[1:21,] %>%
   as_tibble() %>%
   bind_cols(tipss=rownames(p_BM$anc_recon[1:21,])) %>%
   left_join(trait_matrix, by='tipss') %>%
-  select(-tipss, -sp_old) %>%
+  dplyr::select(-tipss, -sp_old) %>%
   pivot_longer(-species) %>%
   mutate(variable=gsub('.y','', gsub('\\.x','', name)),
          impute=ifelse(grepl('y',name), 'No','Yes')) %>%
-  select(-name) %>%
+  dplyr::select(-name) %>%
   pivot_wider(names_from = impute, values_from=value) %>%
   mutate(Imputed=ifelse(is.na(No), 'Imputed', 'Literature')) %>%
   left_join(trait_db_raw %>% distinct(species, .keep_all=T) %>%
-              select(species, genus, family), by='species')
+              dplyr::select(species, genus, family), by='species')
 imp_results %>%
   ggplot(aes(x=family, y=Yes, color=Imputed))+
   geom_boxplot(color='black', fill=NA, outlier.alpha = 0)+
   geom_point(position=position_dodge(width=0.5))+
   facet_wrap(~variable, scales='free_y')+
   labs(x='Family',y='Value')+
+  scale_color_manual(values=c('forestgreen','goldenrod'))+
   theme_classic() +
-  theme(legend.position=c(.7,.25),
+  theme(legend.position='top',
         axis.text.x = element_text(angle=20, hjust=.87, vjust=1))
+
 ```
 
 # So species to consider are:
 
-```{r}
-kable(imp_results %>%
+```{r table of taxa, warning=F, message=F, echo=F}
+n_imputed<-imp_results %>%
   group_by(family, genus, species) %>%
-  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop') %>%
+  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop')
+kable(n_imputed %>%
   filter(n_imp < 3) %>%
   group_by(family, genus) %>% 
     summarize(N=n(), Species=paste(species, collapse = ', ')))
 ```
 
-```{r species discussion, out.height='40%', out.width='90%'}
-imp_results %>%
-  group_by(species) %>%
-  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop') %>%
+```{r species discussion, fig.width=8, fig.height=2.5}
+n_imputed %>%
   ggplot()+
   geom_bar(aes(x=n_imp), fill='goldenrod3', alpha=0.9)+
   geom_text(data=. %>% group_by(n_imp) %>% 
               summarize(labb=paste(species, collapse='\n')),
-            aes(x=n_imp, y=7, label=labb), size=3.5)+
+            aes(x=n_imp, y=3, label=labb), size=3.5)+
   theme_classic()+
   labs(y='N species', x='Traits Imputed')
 ```
+
+```{r fig.height=2, fig.width=5}
+library(ggrepel);library(cowplot)
+ n_imputed %>%
+  ggplot(aes(x=family, y=n_imp, color=genus, fill=genus))+
+  geom_dotplot(binaxis = 'y', stackdir='center')+
+  #geom_text_repel(aes(label=species), size=3)+
+  labs(y='N Imputed Traits')+
+  theme_classic()+theme(legend.position='none')+
+   ggtitle('N Imputed traits of 5 physiological traits')
+```
+
+
