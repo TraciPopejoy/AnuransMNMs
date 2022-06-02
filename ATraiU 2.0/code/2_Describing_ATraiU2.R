@@ -1,21 +1,31 @@
 # Quantifying results of Anuran Physiological Trait Database Search
 library(tidyverse); library(cowplot); library(grid)
 
-trait_long<-read_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv') %>%
+trait_long<-read_csv('ATraiU 2.0/ATraiU2_full_2022MAY_2.csv') %>%
   filter(!(traitName %in% c("Water Loss Rate",
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
-                        "Metabolic Rate")))
-refs <- read_csv('ATraiU 2.0/ATraiU2_reference_list_2022JAN.csv')
+                        "Metabolic Rate", "Metabolism Rate")))
+refs <- read_csv('ATraiU 2.0/ATraiU2_reference_list_2022MAY.csv')
+library(googledrive)
+# identify focal taxa
+sp_files<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
+                     pattern="MNM traits")
+foc_taxa<-gsub(' MNM traits','', sp_files$name)
+foc_taxa<-foc_taxa[foc_taxa!='Pseudacris maculata']
 
 # Summary Stats ----
 nrow(trait_long)
 
 trait_long %>% pull(refID) %>% unique() %>% length()
+refs %>% filter(refID %in% unique(trait_long$refID),
+                grepl('al Review', journal)) %>%
+  nrow()
 trait_long %>% filter(dataCollationType=='concentrated') %>%
   pull(refID) %>% unique() %>% length()
 trait_long %>% filter(species %in% foc_taxa) %>%
   pull(refID) %>% unique() %>% length()
+trait_long %>% filter(species %in% foc_taxa) %>% count(traitName)
 
 trait_long %>% filter(dataCollationType=='concentrated') %>% nrow()
 
@@ -31,8 +41,6 @@ trait_long %>%
 rcs<-read_csv('../National-RCS/rcs_results/Anuran RCS values 20211215.csv') %>% 
   filter(grepl('entire', spatial_extent)) %>%
   select(species, orig.nrow, watershed, log10_WS_sqkm)
-foc_taxa<-gsub(' MNM traits','', sp_files$name)
-foc_taxa<-foc_taxa[foc_taxa!='Pseudacris maculata']
 #rank geo rarity for table 2
 rcs %>% filter(species %in% foc_taxa) %>% 
   mutate(rankgeo=rank(watershed)) %>%
@@ -89,7 +97,7 @@ trait_long %>% filter(!grepl('gosner', lifeStage)) %>%
   pull(lifeStage) %>% unique()
 trait_total<-trait_long %>%
   filter(species %in% foc_taxa, 
-         lifeStage %in% c('adult','unknown','juvenile','metamorph')) %>%
+         lifeStage %in% c('adult','unknown','juvenile','metamorph', )) %>%
   #mutate(lifeStage = case_when(grepl('gosner', lifeStage) ~ 'tadpole',
   #                                lifeStage=='unknown' ~ 'adult',
   #                                T ~ lifeStage)) %>%
@@ -97,12 +105,16 @@ trait_total<-trait_long %>%
   group_by(species) %>%
   tally() %>% ungroup() %>%
   arrange(desc(n))
-
+trait_long %>%
+  filter(species %in% foc_taxa, 
+         lifeStage %in% c('adult','unknown','juvenile','metamorph')) %>%
+  distinct(species, traitName, .keep_all=T) %>%
+  pull(traitName) %>% unique()
 foc_taxa[which(!(foc_taxa %in% trait_total$species), useNames = T)]
 
 trait_long %>%
   filter(species %in% foc_taxa) %>%
-  mutate(lifeStage = case_when(grepl('gosner', lifeStage) ~ 'tadpole',
+  mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
                                   lifeStage=='unknown' ~ 'adult',
                                   T ~ lifeStage)) %>%
   distinct(species, traitName)
@@ -117,6 +129,7 @@ binom.test(4,8)
 binom.test(2,8)
 
 # Summary Figure ----
+library(gridExtra);library(MetBrewer)
 trait_order<-trait_long %>%
   filter(species %in% foc_taxa) %>%
   group_by(species, traitName) %>% slice(1) %>%
@@ -142,12 +155,13 @@ oc<-trait_long %>%
                               'Tforage[min]',
                               'T[bask]',
                               'Tforage[optim]')),
-         Taxa=ifelse(species %in% sp_concon, paste(species,'*'),species),
+         Taxa=ifelse(species %in% sp_concon, paste0(species,'*'),species),
          .groups='drop') %>%
   ggplot()+
   geom_tile(aes(x=TraF, y=Taxa, fill=n))+
-  scale_fill_gradientn('Reference\nCount',
-                       colors=met.brewer('Greek'))+
+  scale_fill_gradient('Reference\nCount',
+                       low='grey90', high='grey20',
+                      breaks=c(1,4,8,12,16))+
   scale_x_discrete('Trait Name')+
   facet_wrap(~FamI, scales='free_y', ncol=1, strip.position = 'left')+
   theme_cowplot()+
@@ -202,7 +216,7 @@ tax_ref_ord<-trait_ref_ndf %>%
   group_by(Taxa) %>% summarize(tn=sum(n)) %>%
   arrange(desc(tn)) %>%
   pull(Taxa)
-trait_ref_ndf %>%
+trait_hist<-trait_ref_ndf %>%
   mutate(TaxF=factor(Taxa, levels=rev(tax_ref_ord)),
          TraitF=factor(traitName, 
                        levels=c('Mass','CTmax','CTmin','Tpref',
@@ -210,10 +224,11 @@ trait_ref_ndf %>%
                                 'Tmerge','Activity'))) %>%
   ggplot()+
   geom_col(aes(y=TaxF, x=n, fill=TraitF), position='stack')+
-  draw_plot(se_inset, x=15, y=10.5, scale=10)+
+  draw_plot(se_inset, x=26.5, y=12.5, scale=30)+
   labs(y='',x='Reference count')+
-  scale_fill_manual('Trait Name', values=met.brewer('Hiroshige'))+
-  scale_x_continuous(breaks=c(0,3,6,9,12,15,18))+
+  scale_fill_manual('Trait Name', values=met.brewer('Hiroshige')[-5])+
+  scale_x_continuous(breaks=seq(0,40,5), 
+                     expand=c(0,0), limits = c(0,40))+
   theme_classic()+
   theme(legend.position=c(.735,.20), 
         legend.text=element_text(size=9),
@@ -224,13 +239,18 @@ trait_ref_ndf %>%
         axis.title.y=element_blank(),
         panel.grid.major.x = element_line(color='grey90'))
 
-ggsave('ATraiU 2.0/manuscript/summary_figure_nref.jpg',
+ggsave(plot=trait_hist,
+       'ATraiU 2.0/manuscript/summary_figure_nref.jpg',
        width=3.5, height=6)
+
+ggsave(plot=grid.arrange(ocp,trait_hist, nrow=1),
+       'ATraiU 2.0/manuscript/summary_figure_combo.jpg',
+       width=7, height=6)
 
 # Comparisons among groups ----
 #species with no traits
 # data frame of n traits for each of our focal taxa
-taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022JAN.csv')
+taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022MAY.csv')
 trait_count_rarity<-data.frame(species=foc_taxa) %>%
   filter(!(species %in% trait_total$species)) %>%
   mutate(n=0)%>%
@@ -281,18 +301,19 @@ fam_ord<-trait_count_rarity %>%
 
 fam_plot<-trait_count_rarity %>%
   mutate(famF=factor(family, levels=rev(fam_ord))) %>%
-ggplot(aes(x=n, y=famF))+
+ggplot(aes(x=n, y=famF, fill=family))+
   geom_boxplot(#data=. %>% 
                  # don't want lines for family with only 1 taxa
                 # filter(!(family %in% c('Scaphiopodidae', 'Microhylidae'))),
-               aes(color=family), outlier.alpha=0)+
+               aes(color=family), alpha=0.5, outlier.alpha=0)+
   geom_point(position=position_jitter(height = .3, width=0),
-             pch=1, size=2)+
+             pch=1, color='black', size=2)+
   #geom_text(data=. %>% group_by(famF) %>% count(),
   #          aes(x=9.3,label=n), color='black')+
   labs(y='Family')+
-  scale_x_continuous('N Traits', breaks=seq(0,8,2))+
-  scale_color_manual('Family', values=gen_pal)+
+  scale_x_continuous('Trait Completeness', breaks=seq(0,8,2))+
+  scale_color_manual('Family', values=gen_pal, 
+                     aesthetics = c('color','fill'))+
   theme_classic()+
   theme(legend.position='none')
 fam_plot
@@ -320,22 +341,23 @@ gen_ord<-trait_count_rarity %>%
 
 gen_plot<-trait_count_rarity %>%
   mutate(genF=factor(genus, levels=rev(gen_ord))) %>%
-  ggplot(aes(x=n, y=genF, color=family))+
-  geom_point(position=position_jitter(height = .3, width=0),
-             size=2, pch=1)+
-  geom_boxplot(data=. %>% 
+  ggplot(aes(x=n, y=genF, fill=family))+
+  geom_boxplot(#data=. %>% 
                  # don't want lines for family with only 1 taxa
-                 filter(!(genus %in% c('Scaphiopus', 'Gastrophryne'))),
-               fill=NA, outlier.alpha=0)+
+              #   filter(!(genus %in% c('Scaphiopus', 'Gastrophryne'))),
+        aes(color=family), alpha=0.5, outlier.alpha=0)+
+   geom_point(position=position_jitter(height = .3, width=0),
+             size=2, color='black', pch=1)+
   #geom_text(data=. %>% group_by(genF) %>% count(),
   #          aes(x=9.3,label=n), color='black')+
   #geom_text(data=gen_group_mem, aes(x=9.5, label=group), color='black',
   #          size=3)+
-  geom_text(aes(x=8.2, y='Pseudacris', label='*'), color='black')+
+  #geom_text(aes(x=8.2, y='Pseudacris', label='*'), color='black')+
   
   labs(y='Genus')+
-  scale_x_continuous('N Traits', breaks=seq(0,8,2))+
-  scale_color_manual('Family',values=gen_pal)+
+  scale_x_continuous('Trait Completeness', breaks=seq(0,8,2))+
+  scale_color_manual('Family',values=gen_pal,
+                     aesthetics=c('color','fill'))+
   theme_classic()+
   theme(legend.text = element_text(size=8),
         legend.position='bottom')
@@ -353,23 +375,24 @@ ggsave('ATraiU 2.0/manuscript/taxonomic_comparisons.jpg',
 # trait and rarity correlation ----
 ?cor.test
 cor.test(trait_count_rarity$log10_WS_sqkm,
-         trait_count_rarity$n, method='spearman')
+         trait_count_rarity$n, method='spearman', exact=F)
 library(scales)
 tcor_plot<-trait_count_rarity %>%
   ggplot()+
-  geom_point(aes(x=log10_WS_sqkm, y=n))+
+  geom_point(aes(x=log10_WS_sqkm, y=n), pch=1)+
   scale_x_continuous(expression('Area of Occupancy, km '^2),
                      breaks=c(3.30103,4,4.69897,5.69897),
                      labels = function(x){comma(10^x)},
-                     limits = c(3.30103, 5.7))+
-  scale_y_continuous('N Adult Traits')+
+                     limits = c(3.30103, 5.77))+
+  scale_y_continuous('Trait Completeness')+
   theme_classic()+
-  theme(axis.text.x = element_text(angle=20, hjust=.9))
+  theme(axis.text.x = element_text(angle=20, hjust=.9),
+        axis.title = element_text(size=9))
 tcor_plot
 
 trait_ls_total<- trait_long %>%
   filter(species %in% foc_taxa) %>%
-  mutate(lifeStage = case_when(grepl('gosner', lifeStage) ~ 'tadpole',
+  mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
                                   lifeStage=='unknown' ~ 'adult',
                                   T ~ lifeStage)) %>%
   #pull(lifeStage) %>% unique()
@@ -389,32 +412,53 @@ trait_ls_total<- trait_long %>%
 nrow(trait_ls_total)
 View(trait_ls_total)
 unique(trait_ls_total$total_ls)
+# total trait completeness
+trait_long %>%
+  filter(species %in% foc_taxa) %>%
+  mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
+                               lifeStage=='unknown' ~ 'adult',
+                               T ~ lifeStage)) %>%
+  distinct(species, traitName, lifeStage, .keep_all=F) %>%
+  group_by(lifeStage) %>% 
+  summarize(all_traits=paste(unique(traitName), collapse=', '),
+            n_trait=length(unique(traitName)))
+sum(9+2+4+2+5)
 
-cor.test(trait_ls_total$n, trait_ls_total$log10_WS_sqkm, method='spearman')
-
+cor.test(trait_ls_total$n, trait_ls_total$log10_WS_sqkm, 
+         method='spearman', exact=F)
+library(ggrepel)
 ls_cor_plot<-trait_ls_total %>%
   replace_na(list(n_ls=0))%>%
   ggplot()+
   geom_point(aes(x=log10_WS_sqkm, y=n, fill=as.character(n_ls),
                  color=as.character(n_ls), shape=as.character(n_ls)),
              size=2, alpha=0.75)+
+  geom_text_repel(data=. %>% ungroup() %>% 
+                    filter(max(n)==n | max(n_ls)==n_ls) %>%
+                    mutate(species=paste0("italic('",species,"')")),
+                  aes(x=log10_WS_sqkm, y=n, label=species),
+                  size=2.4, parse=T,
+                  min.segment.length = 0)+
   scale_x_continuous(expression('Area of Occurrence, km '^2),
                      breaks=c(3.30103,4,4.69897,5.69897),
                      labels = function(x){comma(10^x)},
-                     limits = c(3.30103, 5.7))+
-  scale_y_continuous('N Traits', breaks=c(0,2,4,6,8,10))+
-  scale_color_manual('Life\nStages',values=met.brewer('VanGogh1',5),
+                     limits = c(3.30103, 5.77))+
+  scale_y_continuous('Trait Completeness', breaks=seq(0,16,2))+
+  scale_color_manual('Life\nStages',
+                     values=c('grey70','grey50',
+                              'grey40','grey20','grey10','black'),
                      aesthetics = c('color','fill'))+
-  scale_shape_manual('Life\nStages',values=c(21,22,24,25,23))+
+  scale_shape_manual('Life\nStages',values=c(21,22,24,25,23,19))+
   theme_classic()+
-  theme(#legend.position = c(.15,.7),
+  theme(#legend.position = c(.1,.7),
         legend.text = element_text(size=8),
         legend.title = element_text(size=8),
+        axis.title = element_text(size=9),
         axis.text.x = element_text(angle=20, hjust=.9))
 ls_cor_plot
 
 plot_grid(tcor_plot, ls_cor_plot, labels='AUTO',rel_widths = c(.45,.55))
-ggsave('ATraiU 2.0/manuscript/trait_aoo_correlation.jpg', width=4.75, height=2.5)
+ggsave('ATraiU 2.0/manuscript/trait_aoo_correlation.jpg', width=5, height=2.5)
 
 trait_ls_total %>% filter(n_ls > 2) %>% select(-orig.nrow)
 trait_ls_total %>% filter(n_ls <= 2) %>% select(-orig.nrow, log10_WS_sqkm)

@@ -28,7 +28,7 @@ all_trait_shts <- all_trait_shts %>%
 #and rows that have no value associated with them
 unique(all_trait_shts$Trait)[-c(7,11:16)]
 all_trait_shts_mod<-all_trait_shts %>%
-  filter(Trait %in% unique(all_trait_shts$Trait)[-c(8,11:16)],
+  filter(Trait %in% unique(all_trait_shts$Trait)[-c(7,11:16)],
          !is.na(Value),
          `Source file name` != 'Animal Diversity Web') 
 #View(all_trait_shts_mod)
@@ -36,20 +36,20 @@ all_trait_shts_mod<-all_trait_shts %>%
 # Bring in miscellaneous traits collected ----
 FB_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
                      pattern="Parameters")
-misc_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
-           pattern="Misc")
 FB_trait_data<-read_sheet(FB_sheet$id, sheet="Table 9.2", col_types='c') %>%
    mutate(Trait='Tpref', Units='C') %>%
-  bind_rows(read_sheet(FB_sheet$id, sheet="Ch8Text", col_types='c'))
+  bind_rows(read_sheet(FB_sheet$id, sheet="Ch8Text", col_types='c')) %>%
+  rename(Species_orig=Taxa)
 #View(FB_trait_data)
 
-misc_trait_data<-read_sheet(misc_sheet$id, col_types='c')
+misc_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
+           pattern="Misc")
+misc_trait_data<-read_sheet(misc_sheet$id, sheet='MiscFromLit', col_types='c')
+herp_rev_data<-read_sheet(misc_sheet$id, sheet='HerpReviewData', col_types='c')
 
-write_csv(FB_trait_data, paste0('ATraiU 2.0/intermediate_results/RAW_FB_trait_values',
-                                 format(Sys.Date(), "%Y%m%d"),'.csv'))
-write_csv(misc_trait_data, paste0('ATraiU 2.0/intermediate_results/RAW_misc_trait_values',
-                                 format(Sys.Date(), "%Y%m%d"),'.csv'))
-
+bind_rows(FB_trait_data, misc_trait_data, herp_rev_data) %>% 
+  write_csv(paste0('ATraiU 2.0/intermediate_results/RAW_tangental_trait_values',
+                   format(Sys.Date(), "%Y%m%d"),'.csv'))
 library(rgbif)
 anura_tax<-unique(c(misc_trait_data$Species_orig, FB_trait_data$Taxa, all_trait_shts$taxa))
 anuran.gbif.taxa<-NULL
@@ -60,14 +60,15 @@ for(u in anura_tax){
                               anuran.gbif.taxa)
 }
 View(anuran.gbif.taxa)
-# checked taxa for spelling mistakes on 1/20
+
 taxa_key_start<- anuran.gbif.taxa %>%
   select(dataScientificName, canonicalName, scientificName, family, genus, species)
 write.csv(taxa_key_start, 'ATraiU 2.0/intermediate_results/taxonomic_key_start.csv', row.names = F)
+# checked taxa for spelling mistakes on 01/20/2022, 05/12/2022
 # edited table to link stray taxa to new names using ITIS, i.e. Hyla raddiana
 name_backbone(name='Boana riojana', rank='species', kingdom = 'animals') %>%
   select(canonicalName, scientificName, family, genus, species)
-taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022JAN.csv')
+taxa_key <- read.csv('ATraiU 2.0/ATraiU2_taxonomic_key_2022MAY.csv')
 taxa_key_start[!(taxa_key_start$dataScientificName %in% taxa_key$dataScientificName),]
 
 # Build Reference List ----
@@ -95,16 +96,8 @@ refs_list<-all_trait_shts %>%
   
 write_csv(refs_list, paste0('raw_data/RAW_references_', format(Sys.Date(), "%Y%m%d"), '.csv'))
 sum(is.na(refs_list$CITE))
-
 # looked up the rest of the references by hand
-refs<-read.csv('ATraiU 2.0/intermediate_results/References_20210817.csv') %>% 
-  group_by(citation) %>% 
-  mutate(group_id=cur_group_id()) %>%
-  rename(refID=group_id) %>%
-  ungroup()
-head(refs)
-
-write_csv(refs, 'ATraiU 2.0/ATraiU2_reference_list_2022JAN.csv')
+# also collected all the references from the Herpetelogical Review
 
 # Collate Data ----
 # Combine all trait information
@@ -112,10 +105,7 @@ trait_db_raw<-all_trait_shts_mod %>%
   rename(dataScientificName=taxa) %>%
   mutate(dataCollationType=ifelse(dataScientificName == 'Pseudacris maculata',
                                   'haphazard', 'concentrated')) %>%
-  bind_rows(FB_trait_data %>% 
-              rename(dataScientificName=Taxa) %>% 
-              mutate(dataCollationType='haphazard'),
-            misc_trait_data %>% 
+  bind_rows(bind_rows(FB_trait_data, misc_trait_data, herp_rev_data) %>%
               rename(dataScientificName=Species_orig) %>% 
               mutate(dataCollationType='haphazard')) %>%
   left_join(taxa_key) %>%
@@ -137,7 +127,13 @@ trait_db_raw %>%
          Trait, `Source file name`) %>%  View()
 
 # create a denormalized trait database of all the data ----
-refs<-read.csv('ATraiU 2.0/ATraiU2_reference_list_2022JAN.csv') #bring the reference data in
+refs<-read.csv('ATraiU 2.0/ATraiU2_reference_list_2022MAY.csv') %>% #bring the reference data in
+  group_by(citation) %>% 
+  mutate(group_id=cur_group_id()) %>%
+  rename(refID=group_id) %>%
+  ungroup()
+head(refs)
+write.csv(refs, 'ATraiU 2.0/ATraiU2_reference_list_2022MAY.csv', row.names = F)
 trait_db_raw %>%
   arrange(dataCollationType) %>%
   #remove traits that have been duplicated on accident
@@ -146,6 +142,7 @@ trait_db_raw %>%
   left_join(refs, by=c(`Source file name`="Source.file.name")) %>% 
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
           lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location) %>%
+  #filter(is.na(first_author)) %>% View() %>%
   write_csv('ATraiU 2.0/intermediate_results/denormalized_trait_db.csv')
 
 # Final Collation -----
@@ -199,7 +196,7 @@ tchar<-trait_long %>%
   mutate(lifeStage='adult')
 
 tbif<-trait_long %>%
-  mutate(lifeStage = case_when(grepl('gosner', lifeStage) ~ 'tadpole',
+  mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
                                   lifeStage=='unknown' ~ 'adult',
                                   T ~ lifeStage)) %>%
   group_by(species, lifeStage, traitName) %>%
@@ -207,7 +204,8 @@ tbif<-trait_long %>%
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
                         "Metabolic Rate")),
-         lifeStage=='adult') %>%
+         lifeStage=='adult',
+         traitValue != 'overwinters') %>% # to avoid warnings from as.numeric
   mutate(v_n=as.numeric(traitValue)) %>%
   select(species, lifeStage, refID, traitName, traitValue, v_n) %>%
   pivot_wider(names_from=traitName, values_from = v_n, values_fn=mean) %>%
@@ -223,7 +221,6 @@ tbif<-trait_long %>%
             Tforage_min=ifelse(!all(is.na(Tforage_min)), min(Tforage_min, na.rm=T), NA), 
             Tmerge=ifelse(!all(is.na(Tmerge)), min(Tmerge, na.rm=T), NA)) %>%
   filter(!is.na(species)) # removing Hyla spp. and Hypopachus spp. traits
-# warnings are from Tmerge == overwinters
 View(tbif)
   
 trait_long %>% filter( species == "Lithobates sphenocephalus", grepl('gosner', lifeStage))
@@ -232,29 +229,13 @@ full_join(tchar, tbif, by=c('species','lifeStage')) %>%
   mutate(refIDs=paste(refIDs_n, refIDs_a, sep=', ')) %>%
   select(-refIDs_a, -refIDs_n, -lifeStage) %>%
   select(species, everything()) %>%
-  write.csv('ATraiU 2.0/ATraiU2_summary_values_2022JAN.csv')
-
-#Table 1----
-trait_long %>%
-  group_by(species, traitName) %>%
-  filter(lifeStage=='adult',
-         !is.na(traitValue)) %>%
-  slice(1) %>%
-  group_by(species) %>%  count() %>%
-  right_join(anuran.gbif.taxa %>%
-               filter(species %in% gsub(' MNM traits', '', sp_files$name)) %>%
-               select(family, genus, species) %>%
-               group_by(species) %>% slice(1)) %>%
-  select(family, genus, species, n) %>%
-  arrange(family) %>%
-  write.csv('ATraiU 2.0/manuscript/table_1_220121.csv', row.names = F)
-
+  write.csv('ATraiU 2.0/ATraiU2_summary_values_2022MAY.csv')
 
 # Outlier Analysis for QA/QC -----
 outliers<-bind_rows(
   # all taxa for each trait
 trait_long %>%
-  filter(traitName != 'Activity') %>%
+  filter(traitName != 'Activity', traitValue !='overwinters') %>%
   group_by(traitName, lifeStage) %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
@@ -263,7 +244,7 @@ trait_long %>%
   mutate(outlier = 'trait'),
 # at the family level
 trait_long %>%
-  filter(traitName != 'Activity') %>%
+  filter(traitName != 'Activity', traitValue !='overwinters') %>%
   group_by(traitName, family, lifeStage) %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
@@ -272,7 +253,7 @@ trait_long %>%
   mutate(outlier = 'family'),
 # at the genus level
 trait_long %>%
-  filter(traitName != 'Activity') %>%
+  filter(traitName != 'Activity', traitValue !='overwinters') %>%
   group_by(traitName, genus, lifeStage) %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
@@ -281,7 +262,7 @@ trait_long %>%
   mutate(outlier = 'genus'),
 # at the species level
 trait_long %>%
-  filter(traitName != 'Activity') %>%
+  filter(traitName != 'Activity', traitValue !='overwinters') %>%
   group_by(traitName, species) %>%
   mutate(tV=as.numeric(traitValue),
          z_score=(mean(tV)-tV)/sd(tV)) %>%
@@ -295,14 +276,11 @@ View(outliers %>%
                  source=paste(unique(traitSource), collapse=', ')))
 nrow(outliers %>% distinct(species, traitName, traitValue))
 nrow(outliers %>% distinct(species, traitName, traitValue))/ nrow(trait_long %>% filter(traitName !='Activity'))*100
-# checked each value was transcribed correctly
+# checked each value was transcribed correctly 03/01/2021 [NEED TO DO AGAIN]
 
 trait_long %>%
   # bringing in the outliers flag
   left_join(outliers %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', ')), .groups='drop') %>%
-  
-  write_csv('ATraiU 2.0/ATraiU2_full_2022JAN_beep.csv')
-
-
+  write_csv('ATraiU 2.0/ATraiU2_full_2022MAY_2.csv')

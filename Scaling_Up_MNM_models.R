@@ -21,7 +21,7 @@ imp_traits <- read.csv('imputed_traits_041922.csv') %>%
 library(NicheMapR)
 ecto_out<-NULL
 start.time<-Sys.time()
-for(spp in c('Anaxyrus americanus','Lithobates clamitans')){
+for(spp in c('Anaxyrus americanus','Lithobates clamitans')[1]){
   # idea: use one point per raster; point will be real occurrence
   anax<-read.csv(paste0('../National-RCS/data/occ_data/',spp,'_20210330.csv')) %>%
     st_as_sf(coords=c('Longitude','Latitude'), 
@@ -45,7 +45,7 @@ for(spp in c('Anaxyrus americanus','Lithobates clamitans')){
     left_join(traits_used %>% dplyr::select(species:crepuscular))
   
   #micro_clim_summary<-NULL
-  for(i in 1:10){
+  for(i in 1){
     #run the micro climate data at each row
     micro<-micro_usa(loc = c(va_pts[i,1],va_pts[i,2]),
                      dstart = "01/01/2020", dfinish = "31/12/2020", 
@@ -82,38 +82,40 @@ for(spp in c('Anaxyrus americanus','Lithobates clamitans')){
     body_temps<-ecto$environ[,1:5]
     ecto_out<-bind_rows(ecto_out,
                         body_temps %>% as_tibble() %>%
-                          mutate(hot_TC=spp_traits["CTmax"]-TC) %>%
-                          filter(TC > spp_traits["CTmax"]) %>%
+                          mutate(hot_tsm=as.numeric(spp_traits["CTmax"])-TC) %>%
+                          filter(hot_tsm < 0) %>%
                           summarize(n_above=n(),
                                     max_TC=max(TC),
-                                    tsm=max_TC-spp_traits["CTmax"],
+                                    tsm=min(hot_tsm),
                                     point=i,
                                     X=va_pts[i,1],
-                                    Y=va_pts[i,2]))
+                                    Y=va_pts[i,2],
+                                    species=spp))
     
     print(paste(i, 'of', nrow(va_pts)))
   }
   #assign(paste0(spp_code,'_ecto_out'), ecto_out)
   end.time<-Sys.time()
 }
+end.time-start.time
 #1152
-#START OF FOR LOOP
-# run ectotherm model & quantify output
-ecto_out<-NULL
-for(u in 1:3){#nrow(va_pts))[!((1:nrow(va_pts)) %in% not_run_rows)]{
-  micro<-read_rds(paste0('micro_climate_outputs/PT_row',
-                         u,'.rds'))
 
-}
+View(ecto_out)
+
+
 plot_df<-ecto_out %>% 
-  bind_cols(data.frame(spp=rep(c('Anaxyrus americanus','Lithobates clamitans'), each=10))) %>%
   st_as_sf(coords=c('X','Y'),crs="+proj=longlat +ellps=WGS84 +datum=WGS84")
-
+library(MetBrewer)
 plot_df %>%
+  mutate(tsm1=ifelse(!is.finite(tsm),0,tsm)) %>%
   ggplot()+
-  geom_sf(data=va_r)+
-  geom_sf(aes(color=n_above))+
-  facet_wrap(~spp)
+  geom_sf(data=va_r, fill=NA)+
+  geom_sf(aes(color=tsm))+
+  facet_wrap(~species)+
+  theme_classic()+
+  scale_color_gradientn('Thermal\nSafety\nMargin',
+                       colors=met.brewer('Hiroshige'))+
+  theme(axis.text=element_text(size=6))
 library(cowplot)
 plot_grid(plot_df %>% ggplot()+
             geom_sf(data=va_r)+

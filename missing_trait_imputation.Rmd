@@ -96,26 +96,23 @@ knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/Johnson2021_error
 Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the `r length(tax_ord)` species we have trait information for.
 
 ```{r phylogeny, echo = F, fig.height=4.5}
-# import phylogeny from Jetz and Pyron 2019
+taxa_table <- read_csv('taxa_table.csv') #taxa either contain traits OR in USA
+taxa_table %>% left_join(trait_db_raw, by=c('Trait.name'='species')) %>%
+  filter(is.na(traitName))
+# import phylogeny from Jetz and Pyron 2018
 tree_orig <- read.tree(file = "amph_shl_new_Consensus_7238.tre") 
-tips<-c(gsub('Dryophytes','Hyla',
-             gsub('Lithobates','Rana',
-                  gsub('\ ','_',tax_ord))),
-        'Rana_catesbeiana','Rana_sylvatica','Rana_areolata',
-        'Hyla_cinerea','Hyla_squirella','Hyla_gratiosa')
-tips<-tips[!(tips %in% c('Hyla_cinereus', 'Hyla_squirellus',
-                    'Rana_catesbeianus', 'Hyla_gratiosus',
-                    'Rana_areolatus', 'Rana_sylvaticus',
-                    #also removing those with little traits
-                    'Pseudacris_nigrita','Pseudacris_ornata'))]#, 
-                    #'Pseudacris_feriarum'))]
 tree.pruned <- keep.tip(phy = tree_orig, 
-                        tip = tips) 
-plot(tree.pruned, font=2.5)
+                        tip = taxa_table$Tree.name) 
+tips_foc_sp <- taxa_table %>% filter(Trait.name %in% tax_ord)
+tree.pruned.spl <- keep.tip(phy = tree_orig, 
+                        tip = tips_foc_sp$Tree.name) 
+plot(tree.pruned.spl, font=2.5)
 ```
 
 # Use Rphylopars to imput continuous trait data
 ```{r pressure, warning=F, message=F, echo=F, , out.height='50%'}
+
+
 trait_matrix<-trait_db_raw %>%
   filter(species %in% tax_ord,
          !(species %in% c('Pseudacris nigrita',
@@ -219,5 +216,31 @@ library(ggrepel);library(cowplot)
   theme_classic()+theme(legend.position='none')+
    ggtitle('N Imputed traits of 5 physiological traits')
 ```
+```{r}
+library(phyndr)
+?phyndr_topology
+library(phytools)
+tp_ultra<-force.ultrametric(tree.pruned)
+trait_sub <- trait_db_raw %>% 
+  filter(traitName=='CTmax', lifeStage %in% c('adult','unknown')) %>%
+  left_join(taxa_table %>% dplyr::select(-genus,-family),
+            by=c('species'='Trait.name')) %>%
+  group_by(Tree.name, traitName, genus, family) %>%
+  summarize(med_val=median(as.numeric(traitValue)), .groups='drop') %>%
+  filter(!is.na(Tree.name))
+trait_sub_tax<-trait_sub %>% dplyr::select(genus, family) %>%
+  data_frame()
+rownames(trait_sub_tax)<-trait_sub$Tree.name
+trat_mat<-matrix(trait_sub$med_val)
+rownames(trat_mat)<-trait_sub$Tree.name
+outttt<-phyndr_taxonomy(tp_ultra, rownames(trat_mat), trait_sub_tax)
+str(outttt)
+plot(outttt)
+# need to name the node labels??
+```
 
+
+```{r}
+str(outttt)
+```
 
