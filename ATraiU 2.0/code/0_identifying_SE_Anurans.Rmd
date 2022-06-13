@@ -1,33 +1,57 @@
-library(tidyverse); library(sf)
-# which occur in SE region
-rcs_index<-read.csv('../National-RCS/rcs_results/RCS_table_20201028.csv') %>%
+---
+title: "Identifying Focal Taxa"
+author: "TP DuBose"
+date: "September 2020"
+output: pdf_document
+---
+
+The goal of this script was to identify focal taxa to search for that spanned a gradient of rare to common species. 
+
+```{r setup, include=FALSE}
+library(tidyverse); library(sf); library(knitr)
+```
+
+First, I brought in a preliminary calculation of RCS index values. Then I brought in the point occurrences I used to generate those RCS values and created a spatial dataframe object of those occurrences.
+
+```{r}
+rcs_index<-read.csv('C:/Users/Owner/Desktop/Git/National-RCS/rcs_results/RCS_table_20210405.csv') %>%
   dplyr::select(species, RCS_WS, RCS_buff)
 
-all_anuran_occ<- read.csv('../National-RCS/data/anuran_occ_all20200708.csv')
+all_anuran_occ<- read.csv('C:/Users/Owner/Desktop/Git/National-RCS/data/old_files/anuran_occ_all20200708.csv')
 nrow(all_anuran_occ)
 head(all_anuran_occ)
 #count of all obs
 anuran_count<-all_anuran_occ %>% count(final.taxa) %>%
   rename(total.obs='n')
 
+# spatial dataframe of occurrences
 crs.geo <- st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")
 all_anuran_sf<-st_as_sf(x=all_anuran_occ, 
                         coords=c("Longitude","Latitude"), 
                         crs=crs.geo)
+```
 
-#modified SE USGS region
-#losing IA, MO, TX & OK but gaining WV & VA
+# modified SE USGS region
 
+I then created a polygon that had the states of united states from the *maps* package. I restricted the states I considered the Southeast United States to Mississippi, Georgia, Florida, South Carolina, North Carolina, Virginia, Alabama, and Tennessee. This is slightly modified from the USGS Southeast (or South and East) region: lost IA, MO, TX & OK but gained WV & VA.
+
+```{r}
 library(ggplot2); library(maps)
 states<-st_as_sf(map('state', fill=T))
 st_crs(states)==crs.geo
 
-state_anurans<-st_join(all_anuran_sf, states)
-
 SE_states<-c('mississippi', 'georgia',
              'florida','south carolina', 'north carolina', 'virginia',
               'alabama', 'tennessee')
+```
 
+I then spatially joined the occurrence dataset with the states to identify where each occurrence landed on a map. Then, I filtered the dataset to only those within Virginia and classified anuran rarity based on its RCS value. I did this to try to get a sense of the availability of data among different species vs. their rarity/sensitivity. 
+
+```{r}
+sf::sf_use_s2(FALSE)
+state_anurans<-st_join(all_anuran_sf, 
+                       states %>% st_buffer(0) %>% st_make_valid())
+sf::sf_use_s2(TRUE)
 (sp_choice_list<-state_anurans %>% 
   rename(state='ID.y') %>% filter(state == "virginia") %>%
   count(final.taxa) %>% 
@@ -41,24 +65,26 @@ SE_states<-c('mississippi', 'georgia',
                                   RCS_WS >=0.75 & RCS_WS < 0.825 ~ 'vulnerable',
                                   RCS_WS >=0.825 & RCS_WS <=1 ~ 'very vulnerable')))
 sp_choice_list %>% filter(select_group=='not vulnerable') 
-
+```
+```{r, echo=F}
 ggplot()+geom_histogram(data=sp_choice_list, aes(x=RCS_WS, fill=select_group),
                         binwidth=0.05)
+```
+
+Using that species list, I sampled 4 species from each of my sensitivity classifications. These 4 species would be a starting list for our focal taxa. 
+
+```{r}
 sp_choice_list %>% count(select_group)
 set.seed(10403)
 (sampled_spp<-sp_choice_list %>% 
   group_by(select_group) %>%
-  sample_n(4) %>%
+  sample_n(size=4, replace=F) %>%
   arrange(desc(RCS_WS)))
+```
 
+Below is a list of the first 16 taxa we used as our focal list. This list grew as Vj completed taxa and incorporates the taxa searched before 2020. 
 
-#AHH there is still 58 taxa
-state_anurans %>% 
-  rename(state='ID.y') %>% filter(state == 'virginia') %>%
-  count(final.taxa)
-#in virginia alone there is 34 taxa
-
-#chosen subset
+```{r, echo=F}
 mnm_subset<-c('Lithobates capito', 'Pseudacris brimleyi', 
               'Pseudacris ornata', 'Lithobates grylio',
               'Pseudacris fouquettei', 'Pseudacris ocularis',
@@ -67,23 +93,31 @@ mnm_subset<-c('Lithobates capito', 'Pseudacris brimleyi',
               'Anaxyrus punctatus', 'Pseudacris triseriata',
               'Pseudacris nigrita', 'Lithobates catesbeianus',
               'Dryophytes versicolor', 'Anaxyrus americanus')
-View(sp_choice_list %>% filter(final.taxa %in% mnm_subset) %>%
+kable(sp_choice_list %>% filter(final.taxa %in% mnm_subset) %>%
   arrange(RCS_WS))
+```
 
+Below are some plots I used to investigate different anuran distributions. 
+
+```{r, echo=F}
 ggplot()+
   geom_sf(data=states)+
-  geom_sf(data=state_anurans[state_anurans$final.taxa=='Dryophytes versicolor',])
+  geom_sf(data=state_anurans[state_anurans$final.taxa=='Dryophytes versicolor',])+
+  ggtitle('Dryophytes versicolor')
 ggplot()+
   geom_sf(data=states)+
-  geom_sf(data=state_anurans[state_anurans$final.taxa=='Anaxyrus americanus',])
+  geom_sf(data=state_anurans[state_anurans$final.taxa=='Anaxyrus americanus',])+
+  ggtitle('Anaxyrus americanus')
 ggplot()+
   geom_sf(data=states)+
-  geom_sf(data=all_anuran_sf[all_anuran_sf$final.taxa=='Anaxyrus californicus',])
+  geom_sf(data=all_anuran_sf[all_anuran_sf$final.taxa=='Anaxyrus californicus',])+
+  ggtitle('Anaxyrus californicus')
+```
 
+I used the below code to investigate the distribution of other southeastern anuran taxa. It outputs a pdf that contains all the occurrences for taxa found within the states set as our region above.  
 
+```{r}
 sp_choice_list$final.taxa
-
-
 sp_lists_jan<-state_anurans %>% 
   rename(state='ID.y') %>% filter(state %in% SE_states) %>%
   group_by(final.taxa) %>% slice(1) %>%
@@ -94,3 +128,4 @@ for(i in sp_lists_jan$final.taxa){
     ggplot()+geom_sf(data=states)+geom_sf()+ggtitle(i))
 }
 dev.off()
+```
