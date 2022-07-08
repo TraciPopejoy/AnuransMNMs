@@ -1,0 +1,240 @@
+---
+title: "Species Selection Process"
+author: "TP DuBose"
+date: "6/21/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse); library(knitr)
+library(sf); library(maps)
+```
+
+The purpose of this code is to explore the possible species pool for mechanistic niche models (and thus our full comparison among climate change vulnerability assessments). Below I bring in the trait data and RCS results, which inform our species selection process.
+
+```{r}
+rcs<-read_csv('C:/Users/Owner/Desktop/Git/National-RCS/Anuran_RCS_and_components.csv',
+              show_col_types=FALSE) %>% 
+  filter(grepl('North', extent)) %>%
+  select(species, genus, family, AOO_WS_sqkm, RCS_WS) %>%
+  mutate(rankRCS=91-rank(RCS_WS)) %>%
+  # manually adding in 'Lithobates sevosus' information
+  bind_rows(data.frame(species='Lithobates sevosus', 
+                       genus='Lithobates',family='Ranidae',
+                       AOO_WS_sqkm=737.8, RCS_WS=1.0001))
+trait_phy<-read_csv('ATraiU 2.0/ATraiU2_summary_values_2022JULY.csv', 
+                    show_col_types=FALSE,
+                    col_select=-'...1')
+names(trait_phy)
+```
+
+Then, I use the IUCN species range polygons to determine which frogs are within the Southeast US region. We consider the geopolitical boundaries of Tennessee, Mississippi, Alabama Georgia, Florida, South Carolina, North Carolina, and Virginia as the Southeast US. This was related to [USGS regional boundaries](https://www.usgs.gov/media/images/usgs-regional-map), plus Virginia and Mississippi.
+
+```{r, fig.width=2, fig.height=2}
+crs.albers <- st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs")
+iucn<-read_sf('ANURA')
+states<-st_as_sf(map('state', fill=T, plot=F))
+SE_states<-c('mississippi', 'georgia',
+             'florida','south carolina', 'north carolina', 'virginia',
+             'alabama', 'tennessee')
+sf::sf_use_s2(FALSE)
+se<-states %>% filter(ID %in% SE_states) %>%
+  st_make_valid() %>%
+  st_union() %>% st_transform(st_crs(crs.albers))
+ggplot()+geom_sf(data=se)+theme_void()
+```
+
+Then, I find all anurans whose range intersects with the Southeast region. There were about five who were kept in this pool but are more typical of the Midwest and Northeast region, so I removed anurans that had <1% of their range in our SE region.
+
+```{r}
+iucn_se<-iucn %>%
+  filter(binomial %in% rcs$species,
+         !grepl('Extinct',legend)) %>%
+  st_transform(crs.albers) %>%
+  st_intersection(se) %>%
+  group_by(binomial) %>% summarize()
+
+iucn_all<-iucn %>% filter(binomial %in% rcs$species,
+         !grepl('Extinct',legend)) %>%
+  st_transform(crs.albers) %>%
+  group_by(binomial) %>% summarize() 
+rm_taxa<-iucn_se %>% as_tibble() %>% select(-geometry) %>%
+  mutate(area=st_area(iucn_se)) %>%
+  left_join(iucn_all %>% as_tibble() %>% select(-geometry) %>%
+              mutate(entire_range=st_area(iucn_all)),
+            by='binomial') %>%
+  group_by(binomial) %>%
+  summarize(per_area_in_se=round(as.numeric((area/entire_range))*100, 2)) %>%
+  arrange(per_area_in_se) %>%
+  filter(per_area_in_se < 1) %>% pull(binomial)
+rm(iucn_all, iucn)
+```
+
+This will remove the following taxa from our species pool: `r rm_taxa`. *A. woodhousii*'s range touches MS, *L. blairi*, *L. streckeri*, and *P. triseriata*'s range touch TN, and *L. pipiens* can be found in noVA. 
+
+```{r echo=F, fig.height=6}
+iucn_se<-iucn_se %>% 
+  filter(!grepl('Eleutherodactylus plan', binomial), #introduced
+         !(binomial %in% rm_taxa)) # not really in region
+iucn_se %>% 
+  left_join(rcs %>% distinct(species, genus), by=c('binomial'='species')) %>%
+  mutate(Species=paste0(substr(binomial, 1,1),'. ',
+                        gsub(".* ", "", binomial))) %>%
+  ggplot()+
+  geom_sf(data=se)+
+  geom_sf(aes(fill=Species), alpha=0.2)+
+  facet_wrap(~genus)+
+  scale_fill_viridis_d()+
+  theme_void()
+# creating a vector with focal taxa and exporting for ease across scripts
+foc_taxa<-c(iucn_se$binomial, 'Acris blanchardi','Lithobates kauffeldi')
+write_csv(data.frame(species=foc_taxa), 'focal_taxa.csv')
+```
+
+This gives us a total of `r nrow(iucn_se)` anuran species within our study region. We checked our species list with each state's wildlife department website and herpetology society websites to make sure it was complete. As a result, we included *Acris blanchardi* because its distribution overlaps with *Acris gryllus* in Mississippi (Gamble et al., 2008), included *Lithobates kauffeldi* because it was recently found in North Carolina and Virginia, and excluded *Pseudacris collinsorum* because it was recently described as distinct from *Pseudacris brachyphona* (Ospina et al., 2020). 
+The focal taxa are: `r `
+
+Based on our conversations on 06/07, we wanted to make sure our species have the most important traits to help parameterize these mechanistic niche models. We can assume activity because it is largely phylogenetically conserved (Anderson & Weins 2017). We can also use SVL estimates within ATraiU to estimate Mass if needed (Moore et al. 2020, Wells 2007). Foraging traits were generally not available for many taxa so they are not included below. Below, we count the number of well-covered traits for our focal taxa.
+
+```{r}
+trait_av_df<-trait_phy %>%
+  filter(species %in% foc_taxa) %>%
+  # do not consider activity or mass
+  select(species,starts_with('CT'), starts_with('T')) %>%
+  # remove low coverage traits
+  select(-Tforage_optim, -Tforage_max, -Tforage_min,
+         -Tbask)%>%
+  pivot_longer(-species) %>%
+  group_by(species) %>% filter(!is.na(value)) %>%
+  summarize(n_traits=n(),
+            traits_avail=paste(name, collapse=',')) %>%
+  bind_rows(data.frame(species=foc_taxa) %>%
+              filter(!(species %in% trait_phy$species)) %>%
+              mutate(n_traits=0),
+            # do have some traits in ATraiU but not essential ones
+            data.frame(species=c('Lithobates capito','Dryophytes femoralis',
+                                 'Dryophytes avivoca','Pseudacris ornata',
+                                 'Lithobates kauffeldi'),
+                       n_traits=0)) %>%
+  left_join(rcs %>% select(species, genus, RCS_WS, AOO_WS_sqkm),
+            by='species') 
+```
+
+```{r trait df, echo=F}
+kable(trait_av_df %>% select(-AOO_WS_sqkm) %>%slice_sample(n=5))
+```
+
+Most of our species do not have all these traits available for them in our database. Species that have CTmax, CTmin, and thermal preference, emergence temperature generally are more common than those that have less trait data available in our database.
+
+```{r trait histogram, fig.height=3, fig.width=4.5, echo=F}
+trait_av_df %>%
+  ggplot()+geom_histogram(aes(x=RCS_WS, fill=as.factor(n_traits)),
+                          binwidth=.05)+
+  scale_fill_viridis_d('n Traits w/\n avail. values')+
+  theme_classic()+
+  theme(legend.position = c(.2,.7))
+```
+
+```{r rcs plot, echo=F, fig.width=5, fig.height=5}
+rcs_ord<-rcs %>% arrange(RCS_WS) %>% pull(species)
+rcs %>% left_join(trait_av_df,
+                  by = c("species", "genus", "AOO_WS_sqkm", "RCS_WS")) %>%
+  filter(species %in% iucn_se$binomial) %>%
+  mutate(sp_lev=factor(species, levels=rcs_ord)) %>%
+  ggplot()+
+  geom_point(aes(y=sp_lev, x=RCS_WS, fill=as.factor(n_traits)),
+             size=3, pch=21, alpha=0.8)+
+  scale_fill_viridis_d('n Traits w/\n avail. values', na.value='grey80')+
+  theme_classic()+theme(axis.title.y=element_blank(),
+                        panel.grid.major.y = element_line(color='grey90'))+
+  ggtitle('RCS value vs. n Essential Traits available in ATraiU-TaDS')
+```
+
+So, given our trait data available, the table below describes the number of taxa we could run MNM models at different trait threshold levels. This is without trait imputation. 
+
+```{r, echo=F}
+trait_thres<-trait_av_df %>%
+        count(n_traits) %>%
+        filter(n_traits !=0) %>%
+        arrange(desc(n_traits)) %>%
+        mutate(n_total=cumsum(n))
+kable(trait_thres,
+      caption='The number of species we could run MNM models on if we are ok with the models having n_traits or greater species specific traits.', col.names = c('N essential traits', 'N species with that n traits','N species with > or = n traits'))
+```
+
+At our meeting on 06/07 we discussed the filters used to decide our species pool. The table below describes the number of species that make it past the first two filters and the resulting possible gradients to sample from (rarity & phylogenetic). The RCS range of the 40 species in our region is: `r range(trait_av_df$RCS_WS)` and the number of genera are: `r length(unique(trait_av_df$genus))`. 
+
+```{r filter table, echo=F}
+kable(data.frame( # first column is layers
+  Filter=c('Occurs within the Southeast US', 'Has necessary trait values available', 'Rarity gradient', 'Phylogenetic gradient'),
+       # second column is if 3 traits are ok
+                 ntraits3=c(paste(c(length(foc_taxa), as.character(trait_thres[trait_thres$n_traits==4,"n_total"])), 'species'),
+                             paste(round(range(trait_av_df[trait_av_df$n_traits>=4, "RCS_WS"])[1],2), 'to',
+                                     round(range(trait_av_df[trait_av_df$n_traits>=4, "RCS_WS"])[2],2)), paste(length(unique(trait_av_df[trait_av_df$n_traits>=4,]$genus)), 'genera')),
+                 # third column is if 3 traits are ok
+                 ntraits3=c(paste(c(length(foc_taxa), as.character(trait_thres[trait_thres$n_traits==3,"n_total"])), 'species'),
+                             paste(round(range(trait_av_df[trait_av_df$n_traits>=3, "RCS_WS"])[1],2), 'to',
+                                     round(range(trait_av_df[trait_av_df$n_traits>=3, "RCS_WS"])[2],2)), paste(length(unique(trait_av_df[trait_av_df$n_traits>=3,]$genus)), 'genera')),
+                 # fourth column is if 2 traits are ok
+                 ntraits2=c(paste(c(length(foc_taxa), as.character(trait_thres[trait_thres$n_traits==2,"n_total"])), 'species'),
+                             paste(round(range(trait_av_df[trait_av_df$n_traits>=2, "RCS_WS"])[1],2), 'to',
+                                     round(range(trait_av_df[trait_av_df$n_traits>=2, "RCS_WS"])[2],2)), paste(length(unique(trait_av_df[trait_av_df$n_traits>=2,]$genus)), 'genera'))),
+      caption='Types available at each filtering step if we set an essential trait threshold at 3 or more essential trait values available',
+      col.names = c('Filtering step', '4 traits needed', '3 traits needed', '2 traits needed'))
+```
+
+So just to generate a subset of the 13 species above, I split taxa into RCS groups. The species that meets the minimum number of essential traits and has the highest or lowest RCS will be within this pool; they are labeled as their own group and automatically subsampled. Then I sample one species from each 0.2 increment of the RCS gradient.  
+
+```{r}
+spp_pool<- trait_av_df %>%
+  # minimum trait threshold
+  filter(n_traits >=3) %>% 
+  # put species into RCS groups
+  mutate(RCS_group = case_when(min(RCS_WS)==RCS_WS~'lowest',
+                               max(RCS_WS)==RCS_WS~'highest',
+                               T~as.character(cut(RCS_WS, seq(0,1,.2))))) %>%
+  group_by(RCS_group, genus) %>%
+  # sample 1 species per RCS group and genus
+  slice_sample(n=1, replace=T) %>%
+  distinct(species, .keep_all = T)
+```
+
+```{r species pool, echo=F}
+kable(spp_pool %>% ungroup() %>%
+        select(-RCS_group, -genus, -AOO_WS_sqkm) %>%
+        arrange(RCS_WS),
+      caption='Starting Species Pool. n_traits lists the number of essential traits with values from our database; essential traits are CTmax, CTmin, thermal preference and emergence temperature.')
+```
+
+The following process allows us to capture the following rarity gradient for our mechanistic niche models. 
+
+```{r point plot, echo=F}
+library(ggrepel)
+spp_pool %>%
+ggplot()+
+  geom_point(aes(x=RCS_WS, y=0, color=genus), size=4, alpha=.3)+
+  geom_text_repel(aes(x=RCS_WS, y=0, label=species),
+                  force = 100, force_pull=.001, size=3,
+                  min.segment.length = 0,max.overlaps=15)+
+  theme_classic()+ theme(legend.position = 'top',
+                         axis.text.y=element_blank(),
+        axis.title.y=element_blank(),
+        axis.ticks.length.y = unit(0,'cm'),
+        axis.line.y = element_blank())
+  
+```
+
+Right now, I am going to start with *Dryophytes chrysoscelis*, *Pseudacris cruicider* and *Lithobates catesbeianus*. 
+
+Below are the SVL measurements from frogs that do not have mass estimates in our database.
+
+```{r echo=F}
+atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv',
+                 show_col_types = F)
+kable(atraiu %>% filter(latin_name %in% 
+                    (trait_av_df %>% filter(n_traits==0) %>%
+                       pull(species))) %>%
+  select(latin_name, max.max_length_mm_fem, max.max_length_mm_male),
+  caption = 'SVL estimates we can use to supplement traits for MNM from ATraiU')
+```
+

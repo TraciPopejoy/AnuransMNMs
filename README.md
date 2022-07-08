@@ -1,5 +1,5 @@
 # AnuransMNMs
-Traci P. DuBose Updated 03/10/2021
+Traci P. DuBose Updated 07/08/2022
 
 -------------------------------
 
@@ -9,28 +9,41 @@ This repository contains R code for organizing physiological trait information f
 
 -------------------------------
 
-# Scope
-
-Currently focusing on anurans within the southeast USGS region and Virginia. Our goal is trait information and MNMs for 8 species.
-
--------------------------------
-
 # Intended Uses
 
 Code is currently in draft form and preliminary.
 
 -------------------------------
 
-# Scripts  
-in order from most used to least, currently
+# Files
 
-organizing_phyio_data.R - code to join all individual species googlesheets together, visualize missing traits, and consolidate / organize the reference list.
+### Folder: ANURA
+This contains the IUCN shapefiles, downloaded in October 2020
 
-choosing_MNM_taxa.R - by using occurrence data from our RCS project, I identified species resident in the southeastern US, stratified them by sensitivity, and then chose 4 species from each sensitivity group to a) chose species to get traits for and b) make sure those species encompassed a range of climate sensitivity.
+### Folder: ATraiU 2.0
+This contains all the code and files used to build and analyze ATraiU-TaDS. 
 
-mnm_tutorial.R - worked through tutorial with Vj on NicheMapper inputs, outputs and possibilities.
+### Folder: input_data
+This folder contains data that is used to parameterize or build scripts within this folder. Most notably is a phylogeny and image for trait imputation, a trait table to designate different activities for anurans (from ATraiU, Moore et al. 2020), and micro climate data for the mechanistic niche models. 
 
-deb_mnm_model_notes.R - early notes on which MNM models are available and possibly building own model
+### Folder: results
+This folder contains figures and tables produced from the code within this folder
 
-prep_undergrad_phys_traits.R - early script to identify traits already found in other trait databases (GlobalTherm and AmphiBio) and count the references for the combination of different traits and the term 'anuran'.
+#### 0_Species_Selection.Rmd
+This Rmarkdown identifys 40 species that have < 1% of their International Union for the Conservation of Nature range within the region we are deeming the Southeast. It also pulls in ATraiU-TaDS to describe potential species pool sizes based on the physiological trait data we have available. 
+
+#### 1_missing_trait_imputation.Rmd
+This Rmarkdown has code to imputate physiological, continuous trait data. We use the 40 species that occur within the southeast and imputate traits based on the available trait data. This Rmarkdown also explores the resulting imputed trat data. 
+
+#### 2_Scaling_Up_MNM_models.Rmd
+This Rmarkdown contains for loops and preliminary code for mechanistic niche models built from NicheMapR.
+
+#### x_NicheMapper_sensitivity_20210629.Rmd
+This Rmarkdown contains the preliminary structure for a sensitivity analysis of NicheMapR.  
+
+#### x_old_phys_notes.Rmd
+This Rmarkdown contains random bits of code I've used to increase my knowledge of this project. 
+
+#### focal_taxa.csv
+This contains a 40x1 matrix that has our 40 focal species. It is created when running 0_Species_Selection.Rmd. 
 

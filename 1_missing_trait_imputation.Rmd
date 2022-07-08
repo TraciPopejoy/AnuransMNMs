@@ -1,0 +1,372 @@
+---
+title: "missing_traits"
+author: "TP DuBose"
+date: "1/19/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse); library(knitr)
+library(Rphylopars)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Trait Imputation Methods
+
+[Penone et al. 2014](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12232) reviewed imputation methods and [Johnson et al. 2021](https://onlinelibrary.wiley.com/doi/full/10.1111/geb.13185) addressed how bias affects the top methods. 
+
+Generally, using phylogentic information reduces error but bias in trait completeness leads to different methods being *best*.
+
+#### Bias in our trait dataset
+
+```{r atraiu2, echo=F, warning=F, message=F, fig.width=4.5,fig.height=4}
+trait_db_raw<-read_csv('ATraiU 2.0/ATraiU2_full_2022MAY_2.csv') %>%
+  filter(!(traitName %in% c("Maximum Egg Development Temperature",
+                        "Minimum Egg Development Temperature",
+                        "Standard Metabolic Rate",
+                        "VTmax","VTmin","Water Loss Rate",
+                        "Cutaneous Water Loss Rate",
+                        "Thermal Perfomance Curve",
+                        "Metabolic Rate", "Metabolism Rate")),
+         lifeStage %in% c('adult','unknown')) 
+foc_taxa<-trait_db_raw %>% filter(dataCollationType=='concentrated') %>%
+  pull(species) %>% unique()
+tax_ord<-trait_db_raw %>% 
+  filter(species %in% foc_taxa,
+         lifeStage %in% c('adult', 'unknown')) %>%
+  distinct(species, traitName, .keep_all=T) %>%
+  group_by(species) %>%
+  tally() %>% ungroup() %>%
+  arrange(desc(n)) %>% pull(species)
+trait_ord<-trait_db_raw %>% 
+  filter(species %in% tax_ord) %>%
+  distinct(species, traitName) %>%
+  count(traitName) %>% 
+  arrange(desc(n)) %>% pull(traitName) 
+
+trait_db_raw %>%
+  group_by(species, traitName) %>%
+  filter(!is.na(traitValue),
+         species %in% tax_ord,
+         traitName != 'Tforage_optim') %>%
+  slice(1)%>%
+  select(species, traitName) %>%
+  mutate(presence=1,
+         TraitF=factor(traitName, levels=trait_ord)) %>% 
+  pivot_wider(names_from=species, values_from=presence,
+              values_fill=0) %>%
+  ungroup() %>% 
+  select(-traitName) %>%
+  pivot_longer(-TraitF) %>%
+  mutate(taxaF=factor(name, 
+                      levels=tax_ord)) %>% 
+  ggplot()+
+  geom_tile(aes(x=TraitF, y=taxaF, fill=as.factor(value))) +
+  geom_rect(aes(xmin=0.5,xmax=6.5, ymin=0.5, ymax=20.5), 
+            color='red', fill=NA)+
+  scale_fill_manual(values=c(NA,'black'), name='Trait Available',
+                    labels=c('no', 'yes'))+
+  scale_y_discrete(name="Taxa")+
+  theme_bw()+
+  theme(axis.text.x= element_text(angle=40, hjust=.9),
+        legend.position = 'top',
+        axis.title = element_blank(), 
+        axis.text.y=element_text(face='italic'))
+trait_complete<-trait_db_raw %>%
+  filter(species %in% tax_ord,
+         traitName %in% trait_ord[c(1,3:6)],
+         lifeStage %in% c('adult','unknown')) %>%
+  distinct(species, traitName) %>% 
+  group_by(species) %>% count() %>%
+  mutate(comp=n/6)
+nrow(trait_complete)
+```
+
+This would give us `r nrow(trait_complete)` species total: `r trait_complete %>% filter(comp > 0.6) %>% nrow()` species with > 60% trait completeness and `r trait_complete %>% filter(comp <= 0.6) %>% nrow()` species below that mark.
+
+# Revisiting how different imputation methods work under bias
+```{r, echo=FALSE, fig.cap="", out.width = '90%', out.height='80%', fig.align='center'}
+knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/Johnson2021_error_trait_imputatoin.png")
+```
+
+# Anuran Phylogeny
+
+Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the `r length(tax_ord)` species we have trait information for.
+
+```{r phylogeny, echo = F, fig.height=4.5}
+taxa_table <- read_csv('taxa_table.csv', show_col_types=F) #taxa either contain traits OR in USA
+taxa_table %>% left_join(trait_db_raw, by=c('Trait.name'='species', 'genus', 'family')) %>%
+  filter(is.na(traitName))
+# import phylogeny from Jetz and Pyron 2018
+tree_orig <- read.tree(file = "amph_shl_new_Consensus_7238.tre") 
+tree.pruned <- keep.tip(phy = tree_orig, 
+                        tip = taxa_table$Tree.name) 
+taxa_table$nodeID<-nodeid(tree.pruned, taxa_table$Tree.name)
+tips_foc_sp <- taxa_table %>% filter(Trait.name %in% tax_ord)
+tree.pruned.spl <- keep.tip(phy = tree_orig, 
+                        tip = tips_foc_sp$Tree.name) 
+taxa_table$node<-nodeid(tree.pruned.spl, taxa_table$Tree.name)
+head(taxa_table)
+plot(tree.pruned.spl, font=2.5)
+```
+
+```{r}
+trait_complete %>% left_join(taxa_table, by=c('species'='Trait.name')) %>%
+            mutate(tree.lab=paste0(substr(genus,1,1), '. ',
+                                   sub('.*\\_','',Tree.name)))  %>% View()
+library(ggtree)
+str(tree.pruned.spl)
+trait_tree<-full_join(tree.pruned.spl, 
+          trait_complete %>% left_join(taxa_table, by=c('species'='Trait.name')) %>%
+            mutate(tree.lab=paste0(substr(genus,1,1), '. ',
+                                   sub('.*\\_','',Tree.name))), 
+          by='node')
+library(MetBrewer)
+ggtree(trait_tree, aes(color=comp, label=tree.lab), size=3) + 
+  geom_tiplab(as_ylab=T)+
+  scale_color_gradientn('Trait\nCompleteness',
+                        colors = met.brewer("VanGogh1"),
+                        labels=scales::percent)
+```
+
+# Investigate Life History Trait variation in focal taxa
+
+```{r}
+atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv')
+names(atraiu)
+library(vegan)
+atraiu_num1<-atraiu %>% 
+  select(latin_name, max.longevity_max_yrs,
+         max.max_length_mm_fem, max.fecundity_max,
+         min.maturity_min_yrs_fem, 
+         min.hatch_time_min, 
+         min.metamorph_time_min, min.metamorph_size_min) %>%
+  mutate(across(-latin_name, as.numeric),
+         min.metamorph_time_min=min.metamorph_time_min+1) %>%
+  mutate(across(-latin_name, log10)) %>% # View()
+  mutate(genus=gsub("(\\w+).*", "\\1", latin_name)) %>%
+  group_by(genus) %>%
+  mutate_at(vars(-latin_name, -group_cols()), list(~ifelse(is.na(.), mean(., na.rm = TRUE),.))) %>% 
+  ungroup()%>%
+  drop_na()
+atraiu_num <- atraiu_num1 %>% 
+  select(-latin_name, -genus)  %>%
+  as.matrix()
+rownames(atraiu_num)<-atraiu_num1$latin_name
+
+atraiu_gower<-vegdist(atraiu_num, method='gower', na.rm=T)
+atrai_pcoa<-prcomp(atraiu_num)
+summary(atrai_pcoa)
+```
+
+```{r trait biplot, echo=F}
+library(ggfortify); library(ggrepel)
+# stats help: https://stats.stackexchange.com/questions/276645/arrows-of-underlying-variables-in-pca-biplot-in-r
+loaded = atrai_pcoa$rotation %*% diag(atrai_pcoa$sdev)
+pc_var<-loaded %>% as_tibble() %>% 
+  bind_cols(variable=rownames(loaded)) %>%
+  mutate(across(-variable, function(x){x * 0.3 * sqrt(nrow(atraiu_num) - 1)}),
+         ar_lab=sub('_min','', sub('_max','',sub('_mm', '', sub('_yrs', '', sub('.*\\.','',variable)))))) %>%
+  rename('PC1'=V1, 'PC2'=V2) %>% select(variable, ar_lab, PC1, PC2)
+pc_var
+fortify(atrai_pcoa) %>%
+  rownames_to_column('species') %>%
+  left_join(trait_complete) %>%
+  mutate(pt_shp=ifelse(is.na(comp),NA,'potential')) %>%
+  ggplot()+
+  geom_point(aes(x=PC1, y=PC2, color=comp, shape=pt_shp), size=3)+
+  geom_segment(data=pc_var, x=0, y=0, aes(xend=PC1, yend=PC2),
+               arrow=arrow(length = unit(0.01, "npc")))+
+  geom_text_repel(data=pc_var, aes(x=PC1, y=PC2, label=ar_lab), size=3)+
+  geom_text_repel(data=. %>% filter(comp<.4),
+                  aes(x=PC1, y=PC2, label=species), size=3)+
+  scale_shape_manual(na.value=20, values=16)+
+  scale_color_gradientn('Trait\nCompleteness',
+                        colors = met.brewer("VanGogh1"),
+                        labels=scales::percent,
+                       na.value='grey90')+
+  theme_classic()+
+  theme(legend.position=c(.15,.9))
+```
+
+```{r}
+kable(trait_complete %>% filter(comp > .4) %>%
+  arrange(desc(n)))
+
+```
+
+
+autoplot(atrai_pcoa, data=atraiu_num,
+         loadings = TRUE, loadings.colour = 'blue',
+              loadings.label = TRUE, loadings.label.size = 3)
+datasp <- data.frame(obsnames=row.names(atrai_pcoa$rotation),
+                     x=atrai_pcoa$rotation[,1], y=atrai_pcoa$rotation[,2])
+ggplot(data, aes(x=x, y=y)) + 
+      geom_text(alpha=.4, size=3, aes(label=obsnames)) 
+datat <- data.frame(varnames=rownames(atrai_pcoa$x), PC$rotation)
+    mult <- min(
+        (max(data[,y]) - min(data[,y])/(max(datapc[,y])-min(datapc[,y]))),
+        (max(data[,x]) - min(data[,x])/(max(datapc[,x])-min(datapc[,x])))
+        )
+    datapc <- transform(datapc,
+            v1 = .7 * mult * (get(x)),
+            v2 = .7 * mult * (get(y))
+            )
+    plot <- plot + coord_equal() + geom_text(data=datapc, aes(x=v1, y=v2, label=varnames), size = 5, vjust=1, color="red")
+    plot <- plot + geom_segment(data=datapc, aes(x=0, y=0, xend=v1, yend=v2), arrow=arrow(length=unit(0.2,"cm")), alpha=0.75, color="red")
+biplot(atrai_pcoa)
+```
+
+trait_db_raw %>% filter(Trait == 'CTmax', `Life Stage`%in% c('adult','unknown')) %>%
+  left_join(atraiu, by=c('species'='latin_name')) %>%
+  select(species, Value, s.terrestrial, s.fossorial, s.arboreal, 
+         s.perm_lentic, s.perm_lotic, s.temp_lentic, s.temp_lotic) %>%
+  pivot_longer(cols=starts_with('s.')) %>%
+  filter(value != F) %>%
+  group_by(name) %>%
+  mutate(taxhab=paste(unique(species), collapse='\n'),
+         CTmax=as.numeric(Value)) %>%
+  ggplot()+geom_point(aes(x=name, y=CTmax), 
+                      position=position_jitter(),
+                      alpha=0.3, color='goldenrod3')+
+  stat_summary(aes(x=name, y=CTmax))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90))
+
+```
+
+# Use Rphylopars to imput continuous trait data
+```{r pressure, warning=F, message=F, echo=F, , out.height='50%'}
+
+
+trait_matrix<-trait_db_raw %>%
+  filter(species %in% tax_ord,
+         !(species %in% c('Pseudacris nigrita',
+                          'Pseudacris ornata')),#,
+                          #'Pseudacris feriarum')),
+         lifeStage %in% c('adult','unknown'),
+         !is.na(traitValue),
+         traitName != 'Activity',
+         traitName %in% trait_ord[1:6]) %>% 
+  group_by(species, traitName)%>%
+  #filter(species =='Acris gryllus' & Trait =='Tmerge') %>%
+  summarize(med_val=median(as.numeric(traitValue)), .groups='drop') %>%
+  pivot_wider(names_from=traitName, values_from=med_val)%>%
+  mutate(sp_old=recode(species,
+                       'Lithobates catesbeianus' = 'Rana_catesbeiana',
+                       'Lithobates sylvaticus' = 'Rana_sylvatica',
+                       'Lithobates areolatus' = 'Rana_areolata',
+                       'Dryophytes cinereus' = 'Hyla_cinerea',
+                       'Dryophytes chrysoscelis' = 'Hyla chrysoscelis',
+                       'Dryophytes versicolor' = 'Hyla versicolor',
+                       'Lithobates palustris' = 'Rana palustris',
+                       'Lithobates clamitans' = 'Rana clamitans',
+                       'Lithobates grylio' = 'Rana grylio',
+                       'Dryophytes squirellus' = 'Hyla_squirella',
+                       'Dryophytes gratiosus' = 'Hyla_gratiosa'),
+         tipss=gsub('\ ','_', sp_old)) %>%
+  bind_rows(data.frame(tipss='Pseudacris_feriarum', species='Pseudacris feriarum'))
+#tree.pruned$tip.label[!(tree.pruned$tip.label %in% trait_matrix$tipss)]
+trait_mat_fin<-data.frame(trait_matrix %>%
+  dplyr::select(-species, -sp_old) %>% rename(species=tipss) %>%
+  dplyr::select(species, everything()))
+```
+We use the following code to impute the traits using the *Rphylopars* package. 
+- estimates phylogenetic and phenotypic variance-covariance matrices 
+- assumes phenotypic covariance is equivalent among species
+- uses a Browning motion model of evolution
+Essentially is a maximum likelihood frequentist way to impute traits
+
+```{r results, echo=T, out.width='60%'}
+p_BM <- phylopars(trait_data = trait_mat_fin, tree = tree.pruned,
+                  phylo_correlated=F)
+```
+```{r results graph,  fig.height=4, echo=F}
+#results!
+imp_results<-p_BM$anc_recon[1:21,] %>%
+  as_tibble() %>%
+  bind_cols(tipss=rownames(p_BM$anc_recon[1:21,])) %>%
+  left_join(trait_matrix, by='tipss') %>%
+  dplyr::select(-tipss, -sp_old) %>%
+  pivot_longer(-species) %>%
+  mutate(variable=gsub('.y','', gsub('\\.x','', name)),
+         impute=ifelse(grepl('y',name), 'No','Yes')) %>%
+  dplyr::select(-name) %>%
+  pivot_wider(names_from = impute, values_from=value) %>%
+  mutate(Imputed=ifelse(is.na(No), 'Imputed', 'Literature')) %>%
+  left_join(trait_db_raw %>% distinct(species, .keep_all=T) %>%
+              dplyr::select(species, genus, family), by='species')
+imp_results %>%
+  ggplot(aes(x=family, y=Yes, color=Imputed))+
+  geom_boxplot(color='black', fill=NA, outlier.alpha = 0)+
+  geom_point(position=position_dodge(width=0.5))+
+  facet_wrap(~variable, scales='free_y')+
+  labs(x='Family',y='Value')+
+  scale_color_manual(values=c('forestgreen','goldenrod'))+
+  theme_classic() +
+  theme(legend.position='top',
+        axis.text.x = element_text(angle=20, hjust=.87, vjust=1))
+
+```
+
+# So species to consider are:
+
+```{r table of taxa, warning=F, message=F, echo=F}
+n_imputed<-imp_results %>%
+  group_by(family, genus, species) %>%
+  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop')
+kable(n_imputed %>%
+  filter(n_imp < 3) %>%
+  group_by(family, genus) %>% 
+    summarize(N=n(), Species=paste(species, collapse = ', ')))
+```
+
+```{r species discussion, fig.width=8, fig.height=2.5}
+n_imputed %>%
+  ggplot()+
+  geom_bar(aes(x=n_imp), fill='goldenrod3', alpha=0.9)+
+  geom_text(data=. %>% group_by(n_imp) %>% 
+              summarize(labb=paste(species, collapse='\n')),
+            aes(x=n_imp, y=3, label=labb), size=3.5)+
+  theme_classic()+
+  labs(y='N species', x='Traits Imputed')
+```
+
+```{r fig.height=2, fig.width=5}
+library(ggrepel);library(cowplot)
+ n_imputed %>%
+  ggplot(aes(x=family, y=n_imp, color=genus, fill=genus))+
+  geom_dotplot(binaxis = 'y', stackdir='center')+
+  #geom_text_repel(aes(label=species), size=3)+
+  labs(y='N Imputed Traits')+
+  theme_classic()+theme(legend.position='none')+
+   ggtitle('N Imputed traits of 5 physiological traits')
+```
+```{r}
+library(phyndr)
+?phyndr_topology
+library(phytools)
+tp_ultra<-force.ultrametric(tree.pruned)
+trait_sub <- trait_db_raw %>% 
+  filter(traitName=='CTmax', lifeStage %in% c('adult','unknown')) %>%
+  left_join(taxa_table %>% dplyr::select(-genus,-family),
+            by=c('species'='Trait.name')) %>%
+  group_by(Tree.name, traitName, genus, family) %>%
+  summarize(med_val=median(as.numeric(traitValue)), .groups='drop') %>%
+  filter(!is.na(Tree.name))
+trait_sub_tax<-trait_sub %>% dplyr::select(genus, family) %>%
+  data_frame()
+rownames(trait_sub_tax)<-trait_sub$Tree.name
+trat_mat<-matrix(trait_sub$med_val)
+rownames(trat_mat)<-trait_sub$Tree.name
+outttt<-phyndr_taxonomy(tp_ultra, rownames(trat_mat), trait_sub_tax)
+str(outttt)
+plot(outttt)
+# need to name the node labels??
+```
+
+
+```{r}
+str(outttt)
+```
+

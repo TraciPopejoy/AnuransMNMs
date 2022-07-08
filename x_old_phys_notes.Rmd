@@ -1,0 +1,271 @@
+---
+title: "Old note related to physiology"
+author: "TP DuBose"
+date: "7/8/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(sf); library(NicheMapR)
+dvers_occ<-read_csv('../National-RCS/data/occ_data/Dryophytes versicolor_20210330.csv')
+atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv')
+trait_db_raw %>% filter(species=='Dryophytes versicolor') %>% View()
+atraiu %>% filter(latin_name=='Dryophytes versicolor') %>% select(s.arboreal)
+dvers_occ %>% 
+  st_as_sf(coords=c('Longitude','Latitude')) %>%
+  ggplot()+geom_sf()
+longlat.df<-dvers_occ %>% sample_n(5) %>%
+  select(Longitude,Latitude) 
+thermal_composite<-NULL
+graph.bt<-NULL
+for(u in 1:5){
+longlat<-as_vector(longlat.df[u,])
+micro <- micro_global(loc = longlat,
+                                    timeinterval = 12)
+ecto<-ectotherm(Ww_g=6.5, 
+                CT_max=38.7, 
+                CT_min=-3, 
+                T_pref=30,
+                diurn=0,
+                nocturn=1,
+                crepus=1,
+                burrow=0,
+                climb=1,
+                shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                #maxdepth = 3, #maximum depth of the burrow
+                T_B_min=18,
+                T_RB_min=18)
+
+body_temp<-as_tibble(ecto$environ)%>%
+  mutate(date_x=as_date(DOY-1, origin='2019-01-01'),
+         day_time=ymd_h(paste0(date_x, " ", TIME))) 
+graph.bt<-bind_rows(body_temp %>%
+                     mutate(point=paste(longlat, collapse=', ')),
+                    graph.bt)
+
+thermal_composite<-bind_rows(body_temp %>% 
+                               mutate(them_cap=ifelse(TC < 0, abs(TC + 3), 38.7-TC)) %>%
+                                        group_by(DOY) %>% summarize(tc_dif=mean(them_cap),
+                                        point=paste(longlat, collapse=', ')),
+          thermal_composite)
+}
+
+graph.bt %>%
+  filter(grepl('-87.7782', point)) %>%
+  filter(day_time<'2019-08-01 0:00' & day_time > '2019-07-01 0:00') %>%
+  ggplot()+
+  geom_point(aes(x=day_time,y=TC, shape=as.character(ACT)))+
+  geom_line(aes(x=day_time,y=TC, color=point),
+            size=1.5, alpha=0.35)+
+  geom_hline(yintercept=c(38.7, -3), color='red')+
+  #facet_wrap(~DOY, nrow=1)+
+  scale_color_viridis_d(name='point',)+
+  scale_y_continuous('Body Temperature')+
+  theme_bw()+
+  theme(axis.text.x=element_text(angle=30, size=6, hjust=.9))+
+  facet_wrap(~date_x, scales='free_x', nrow=1)
+
+thermal_composite %>%
+  ggplot(aes(x=point, y=tc_dif))+
+  geom_point(position='jitter',alpha=0.3)+stat_summary()+
+  theme_bw()+theme(axis.text.x = element_text(angle=90))
+```
+
+
+
+```{r}
+library(tidyverse)
+atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv')
+head(atraiu)
+
+library(vegan)
+names(atraiu)
+atraiu_num<-atraiu %>% select(latin_name,
+  s.Dry:s.human_modified_breed, 
+                  min.maturity_min_yrs_fem: max.metamorph_size_max) %>%
+  mutate(across(-latin_name, as.numeric),
+         genus=gsub("(\\w+).*", "\\1", latin_name)) %>%
+  #group_by(genus) %>%
+  #mutate_at(vars(-latin_name, -group_cols()), list(~ifelse(is.na(.), mean(., na.rm = TRUE),.))) %>%
+  #ungroup() %>% 
+  select(-latin_name, -genus) %>%
+  as.matrix()
+rownames(atraiu_num)<-atraiu$latin_name
+atraiu_cor<-cor(atraiu_num, use='na.or.complete')
+ct<-which(abs(atraiu_cor)>0.55, arr.ind = T)  %>%
+  as_tibble() %>%
+  filter(row != col) %>%
+  left_join(data.frame(row=1:length(rownames(atraiu_cor)),
+                       trait.row=rownames(atraiu_cor))) %>%
+  left_join(data.frame(col=1:length(colnames(atraiu_cor)),
+                       trait.col=colnames(atraiu_cor))) %>%
+  as.data.frame()
+bind_cols(ct,
+          corel=sapply(1:nrow(ct), function(x) atraiu_cor[ct[x,1], ct[x,2]]) ) %>%
+  distinct(corel, .keep_all = T)
+atraiu_num_1
+atraiu_cor_red<-cor(atraiu_num[,-c(35,18,27,5, 20)],
+                    use='na.or.complete')
+
+library(corrplot)
+corrplot(atraiu_cor_red, tl.cex=.5)
+colSums(is.na(atraiu_num))
+taxa_table <- read_csv('taxa_table_0503.csv') #taxa either contain traits OR in USA
+taxa_table %>% filter(!(Trait.name %in% rownames(atraiu_num))
+# import phylogeny from Jetz and Pyron 2018
+library(Rphylopars)
+tree_orig <- read.tree(file = "amph_shl_new_Consensus_7238.tre") 
+tips_foc_sp <- taxa_table %>% filter(Trait.name %in% atraiu$latin_name)
+tree.pruned.spl <- keep.tip(phy = tree_orig, 
+                            tip = tips_foc_sp$Tree.name) 
+plot(tree.pruned.spl, font=2.5)
+rm(tree_orig, taxa_table)
+atraiu_1<-atraiu %>%
+  select(latin_name,
+         max.longevity_max_yrs, max.max_length_mm_fem,
+         min.fecundity_min, min.maturity_min_yrs_fem, min.metamorph_time_min) %>%
+  right_join(tips_foc_sp, by=c('latin_name'='Trait.name')) %>%
+  select(latin_name, Tree.name, genus, family, everything()) %>%
+  as.data.frame()
+colSums(is.na(atraiu_1))
+
+p_BM <- phylopars(trait_data = atraiu_1[,-c(1:4)], tree = tree.pruned.spl,
+                  phylo_correlated=F)
+
+
+metaMDS(atraiu_num[1:30,])
+
+
+
+atraiu_num[21:30]
+
+trait_db_raw %>% filter(Trait == 'CTmax', `Life Stage`%in% c('adult','unknown')) %>%
+  left_join(atraiu, by=c('species'='latin_name')) %>%
+  select(species, Value, s.terrestrial, s.fossorial, s.arboreal, 
+         s.perm_lentic, s.perm_lotic, s.temp_lentic, s.temp_lotic) %>%
+  pivot_longer(cols=starts_with('s.')) %>%
+  filter(value != F) %>%
+  group_by(name) %>%
+  mutate(taxhab=paste(unique(species), collapse='\n'),
+         CTmax=as.numeric(Value)) %>%
+  ggplot()+geom_point(aes(x=name, y=CTmax), 
+                      position=position_jitter(),
+                      alpha=0.3, color='goldenrod3')+
+  stat_summary(aes(x=name, y=CTmax))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90))
+
+
+
+```
+
+
+
+The below code chunk builds a raster map of 'species richness' based on IUCN range maps of our 40 focal species. 
+
+```{r}
+library(sf)
+a2_taxa<-c('Anaxyrus americanus', 
+           'Anaxyrus fowleri', 'Anaxyrus punctatus', 'Anaxyrus quercicus', 'Anaxyrus terrestris',
+           'Acris crepitans', 'Acris gryllus', 'Dryophytes chrysoscelis', 'Dryophytes cinereus',
+           'Dryophytes gratiosus', 'Dryophytes squirellus', 'Dryophytes versicolor', 'Pseudacris nigrita',
+           'Pseudacris triseriata', 'Pseudacris brachyphona', 'Pseudacris brimleyi', 'Pseudacris feriarum',
+           'Pseudacris fouquettei', 'Pseudacris ocularis', 'Pseudacris ornata', 'Gastrophryne carolinensis',
+           'Lithobates catesbeianus', 'Lithobates clamitans', 'Lithobates grylio', 'Lithobates palustris',
+           'Lithobates sylvaticus','Lithobates areolatus', 'Lithobates capito', 'Scaphiopus holbrookii')
+iucn_anuran<-read_sf('ANURA', 'ANURA') %>%
+  filter(binomial)
+
+library(fasterize)
+se_frogs<-iucn_anuran %>% 
+  filter(binomial %in% a2_taxa,
+         !(binomial == a2_taxa[22] & origin == 3)) %>%
+  #filter(binomial %in% a2_taxa[22]) %>%
+  group_by(binomial) %>%
+  summarize()
+r <- raster(se_frogs, res = .25)
+r2<-fasterize(st_cast(se_frogs, 'POLYGON'), r, fun='sum') 
+plot(r2)
+library(raster)
+raster.points <- rasterToPoints(r2)
+raster.points <- data.frame(raster.points)
+colnames(raster.points) <-c('x','y','layer')
+
+library(maps)
+SE_states<-c('mississippi', 'georgia',
+             'florida','south carolina', 'north carolina', 'virginia',
+             'alabama', 'tennessee')
+usa <- st_as_sf(map("usa", plot = FALSE, fill = TRUE))
+se_states<-st_as_sf(map("state", plot = FALSE, fill = TRUE))  %>%
+  filter(ID %in% SE_states)
+an_range<-ggplot()+
+  geom_tile(data=raster.points,
+          aes(x=x, y=y, fill=layer))+
+  geom_sf(data=se_states, 
+          color='black', fill=NA)+
+  coord_sf(xlim=st_bbox(se_states)[c(1,3)],
+           ylim=st_bbox(se_states)[c(2,4)])+
+  scale_fill_gradient('species\nrichness',
+                      low='grey90', high='grey30',
+                      breaks=c(0,4,8,12,16), expand=c(0,0))+
+  labs(x="Longitude", y="Latitude")+
+  theme_classic()+
+  theme(legend.title=element_text(size=8),
+        legend.text = element_text(size=8),
+        axis.title=element_text(size=9),
+        axis.text=element_text(size=8))
+ins<-ggplot()+
+  geom_sf(data=se_states, color='grey', fill='grey')+
+  geom_sf(data=usa, fill=NA, color='black')+
+  labs(x="Longitude", y="Latitude")+
+  theme_classic()+
+  theme(axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks= element_blank(),
+        panel.border = element_rect(color='black', fill=NA),
+        plot.margin = unit(c(0,0,0,0),'inches'))
+library(cowplot)
+ggdraw() +
+  draw_plot(an_range) +
+  draw_plot(ins, x = 0.19, y = 0.19, width = 0.23, height = 0.23)
+ggsave('AT2_fig/study_species_extent.jpg')
+gg_inset_map1
+
+
+```
+
+The below chunk of code was to compare the standard deviation of climate experienced (so climate specificity within RCS) to the thermal capacity (difference between its CTmin and CTmax). 
+
+```{r}
+#check that sd climate change matches what we know of anuran physiology
+library(tidyverse)
+rcs.cs<-read.csv('../National-RCS/rcs_results/Anuran RCS values 20210405.csv') %>%
+  select(species, WS_CS, CS_WS_adj, buff_CS)
+raw_tem_sd<-read.csv('../National-RCS/rcs_results/intermediate results/taxa_ws_climate_values20210402.csv') %>%
+  filter(!grepl('ppt',value_type),
+         value_origin=='huc12') %>%
+  group_by(species, value_origin, value_type) %>%
+  summarize(WS_sd=sd(value))
+trait_db_raw<-read_csv('denormalized_trait_db.csv')
+sd_vs_therm<-trait_db_raw %>%
+  filter(Trait %in% c('CTmax','CTmin'),
+         `Life Stage`=='adult') %>%
+  select(species, Trait, Value) %>%
+  group_by(species, Trait) %>%
+  summarize(v=mean(as.numeric(Value), na.rm=T)) %>%
+  pivot_wider(names_from=Trait, values_from=v) %>%
+  filter(!is.na(CTmin)&!is.na(CTmax)) %>%
+  mutate(thermal_capacity=CTmax-CTmin) %>%
+  left_join(raw_tem_sd ) %>%
+  filter(!is.na(value_type)) 
+ggplot(sd_vs_therm,aes(x=thermal_capacity, y=WS_sd))+
+  geom_point()+geom_smooth(method='lm')+
+  facet_wrap(~value_type, scales='free')
+summary(lm(WS_sd~thermal_capacity, data=sd_vs_therm[sd_vs_therm$value_type=='tmax',]))
+summary(lm(WS_sd~thermal_capacity, data=sd_vs_therm[sd_vs_therm$value_type=='tmin',]))
+```
