@@ -1,7 +1,7 @@
 ---
 title: "Organizing Results of Physiological Literature Search"
 author: "TP DuBose"
-date: "06/02/2022"
+date: "07/01/2022"
 output: pdf_document
 ---
 
@@ -83,7 +83,7 @@ for(u in anura_tax){
                               anuran.gbif.taxa)
 }
 taxa_key_start<- anuran.gbif.taxa %>%
-  select(dataScientificName, canonicalName, scientificName, family, genus, species)
+  select(dataScientificName, canonicalName, scientificName, family, genus, species, usageKey)
 write.csv(taxa_key_start, '../intermediate_results/taxonomic_key_start.csv', row.names = F)
 ```
 
@@ -91,54 +91,50 @@ I then checked taxa for spelling mistakes on 01/20/2022 and 05/12/2022. I also e
 
 ```{r}
 name_backbone(name='Boana riojana', rank='species', kingdom = 'animals') %>%
-  select(canonicalName, scientificName, family, genus, species)
-taxa_key <- read.csv('../ATraiU2_taxonomic_key_2022MAY.csv')
+  select(canonicalName, scientificName, family, genus, species, usageKey)
+taxa_key <- read.csv('../ATraiU2_taxonomic_key_2022JULY.csv')
 taxa_key_start[!(taxa_key_start$dataScientificName %in% taxa_key$dataScientificName),]
 ```
 
 # Build Reference List ----
 
-I used the below code to identify references with doi and cross reference to populate author and journal information. I haven't used this code chunk since summer 2021 though. After Summer 2021, I looked up the rest of the references by hand. I also collected all the reference information from the Herpetelogical Review.
+I used the below code to identify references with doi and cross reference to populate author and journal information. I haven't used this code chunk since July 7, 2022 though. I looked up missing references by hand. I also collected all the reference information from the Herpetelogical Review.
 
 ```{r, eval=F}
+#remotes::install_github("ropensci/rcrossref")
 library(rcrossref)
+test<-all_trait_shts$DOI[1]
+cr_cn(test,format='text')
+rm(test)
 doi.refs<-all_trait_shts %>% 
-  filter(!is.na(doi),
-         !(doi %in% c("NULL", "-", 28)),
+  rename(`Source file name`=Source.file.name) %>%
+  filter(!is.na(DOI),
+         !(DOI %in% c("NULL", "-", 28)),
          !grepl('Rausch', `Source file name`)) %>%
-  group_by(doi) %>% slice(1) %>% ungroup() %>%
-  select(`Source file name`,doi) %>% 
+  distinct(`Source file name`, DOI) %>%
   rowwise() %>% 
-  mutate(citation=list(cr_cn(dois=sub("DOI ", "", doi), format='text')))
+  mutate(citation=list(cr_cn(dois=sub("DOI ", "", DOI), format='text')))
 #will get lots of blue text, just need to hand fix Rausch
 #49 is bad
 doi.refs<-doi.refs %>%
   mutate(citation=ifelse(is.null(citation),NA,unlist(citation)))
 
-# bring it all back together into one reference list
-refs_list<-all_trait_shts %>%
-  select(taxa, `Source file name`, doi) %>%
-  filter(!is.na(`Source file name`)) %>%
-  group_by(`Source file name`) %>% slice(1) %>%
-  left_join(doi.refs) 
-  
-write_csv(refs_list, paste0('raw_data/RAW_references_', format(Sys.Date(), "%Y%m%d"), '.csv'))
-sum(is.na(refs_list$CITE))
+write_csv(doi.refs, paste0('../intermediate_results/RAW_references_', format(Sys.Date(), "%Y%m%d"), '.csv'), )
 ```
 
 After entering all the references, I add a unique ID for each reference in the code chunk below. 
 
 ```{r, eval=F}
 #bring the reference data in
-refs<-read.csv('../ATraiU2_reference_list_2022MAY.csv') %>% 
+refs<-read.csv('../ATraiU2_reference_list_2022JULY.csv') %>% 
   group_by(citation) %>% 
   mutate(group_id=cur_group_id()) %>%
   rename(refID=group_id) %>%
   ungroup()
-write.csv(refs, '../ATraiU2_reference_list_2022MAY.csv', row.names = F)
+write.csv(refs, '../ATraiU2_reference_list_2022JULY.csv', row.names = F)
 ```
 ```{r print refs, echo=F}
-refs<-read.csv('../ATraiU2_reference_list_2022MAY.csv') %>% select(-X)
+refs<-read.csv('../ATraiU2_reference_list_2022JULY.csv')
 kable(refs %>% slice_sample(n=4))
 ```
 
@@ -286,7 +282,7 @@ full_join(tchar, tbif, by=c('species','lifeStage')) %>%
   mutate(refIDs=paste(refIDs_n, refIDs_a, sep=', ')) %>%
   select(-refIDs_a, -refIDs_n, -lifeStage) %>%
   select(species, everything()) %>%
-  write.csv('../ATraiU2_summary_values_2022MAY.csv')
+  write.csv('../ATraiU2_summary_values_2022JULY.csv')
 ```
 ```{r, echo=F}
 kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
@@ -299,7 +295,7 @@ kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
 
 # Outlier Analysis for QA/QC -----
 
-And finally, I checked for numerical outliers as a way to QA/QC the data. A numerical outlier is defined as a value with a z score > 2.49 at either a species, family, or entire trait scale. These numerical outliers might be used with caution for future database users. This occurs after two people double checked data entry. 
+I checked for numerical outliers as a way to QA/QC the data. A numerical outlier is defined as a value with a z score > 2.49 at either a species, family, or entire trait scale. These numerical outliers might be used with caution for future database users. This occurs after two people double checked data entry. 
 
 ```{r}
 outliers<-bind_rows(
@@ -360,5 +356,5 @@ trait_long %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', '), .groups='drop'),
             by=c('species','traitName','traitValue')) %>%
-  write_csv('../ATraiU2_full_2022MAY_2.csv')
+  write_csv('../ATraiU2_full_2022JULY.csv')
 ```

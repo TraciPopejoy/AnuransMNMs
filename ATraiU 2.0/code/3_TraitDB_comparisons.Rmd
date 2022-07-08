@@ -10,17 +10,16 @@ library(tidyverse); library(knitr)
 ```
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022MAY_2.csv', show_col_types = F) %>%
+trait_long<-read_csv('../ATraiU2_full_2022JULY.csv', show_col_types = F) %>%
   filter(!(traitName %in% c("Water Loss Rate",
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
                         "Metabolic Rate", "Metabolism Rate",
                         'Tforage_optim'))) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) 
-refs <- read_csv('../ATraiU2_reference_list_2022MAY.csv', show_col_types = F) %>%
-  select(-`...1`)
-taxa_key<-read.csv('../ATraiU2_taxonomic_key_2022MAY.csv')
-foc_taxa<-gsub(' MNM traits','', sp_files$name)
+refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
+taxa_key<-read.csv('../ATraiU2_taxonomic_key_2022JULY.csv')
+foc_taxa<-read.csv('../../focal_taxa.csv') %>% pull(species)
 ```
 # GlobTherm comparison ----
 
@@ -30,20 +29,14 @@ trait_long %>% filter(traitName %in% c('CTmax', 'CTmin'),
                       lifeStage %in% c('adult','unknown')) %>%
   distinct(species, traitName, refID) %>%
   pivot_wider(names_from=traitName, values_from=refID, 
-              values_fn=function(x){paste(x, collapse=',')})
+              values_fn=function(x){paste(x, collapse=',')}) %>%
+  arrange(species)
 globaltherm<-read.csv('C:/Users/Owner/Downloads/GlobTherm/GlobalTherm_upload_02_11_17.csv')
 gt_anurans<-globaltherm %>% filter(Order=='Anura') %>%
   mutate(species1=paste(Genus, Species)) %>%
   filter(species1 %in% c(trait_long$species, trait_long$canonicalName)|
-           Genus %in% c(unique(trait_long$genus), 'Hyla', 'Bufo'))
-
-gt_anurans %>% select(Genus, Species, N, Tmax, tmin, REF_max, REF_min) %>% View()
-refs %>% filter(grepl('Brattstrom', first_author)) %>%
-  select(Source.file.name, refID, first_author)
-refs %>% filter(grepl('Mahoney', first_author)) %>%
-  select(Source.file.name, refID, first_author)
-refs %>% filter(grepl('Holzma', first_author)) %>%
-  select(Source.file.name, refID, first_author)
+           Genus %in% c(foc_taxa, 'Hyla', 'Bufo'))
+refs %>% filter(refID==117)
 ```
 
 So with that sheet, I can compare it with the trait_long table to see if we got everything. I typically do it by reference. 
@@ -91,7 +84,7 @@ amphi_foc %>% filter(is.na(Diu)&is.na(Noc)&is.na(Crepu)) %>%
 ```
 
 ```{r}
-
+View(amphibio %>% select(Species, Body_mass_g, Diu, Noc, Crepu))
 ```
 
 ```{r, eval=F}

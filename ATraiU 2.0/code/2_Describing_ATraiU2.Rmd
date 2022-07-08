@@ -7,26 +7,21 @@ output: pdf_document
 
 ```{r setup, include=F}
 library(tidyverse); library(cowplot); library(grid); library(knitr)
+library(maps);library(sf)
 ```
 
 The purpose of this code is to describe the physiological trait database for the manuscript results. We start by bringing in the necessary trait table and references. We also identify our entire focal species list.
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022MAY_2.csv', show_col_types = F) %>%
+trait_long<-read_csv('../ATraiU2_full_2022JULY.csv', show_col_types = F) %>%
   filter(!(traitName %in% c("Water Loss Rate",
                         "Minimum Egg Development Temperature",
                         "Maximum Egg Development Temperature",
                         "Metabolic Rate", "Metabolism Rate",
                         'Tforage_optim'))) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) 
-refs <- read_csv('../ATraiU2_reference_list_2022MAY.csv', show_col_types = F) %>%
-  select(-`...1`)
-library(googledrive)
-# identify focal taxa
-sp_files<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
-                     pattern="MNM traits")
-foc_taxa<-gsub(' MNM traits','', sp_files$name)
-foc_taxa<-foc_taxa[foc_taxa!='Pseudacris maculata']
+refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
+foc_taxa<-read.csv('../../focal_taxa.csv') %>% pull(species)
 ```
 
 Our focal taxa are `r foc_taxa`. 
@@ -36,25 +31,39 @@ We found trait values for the following traits: `r trait_long %>% pull(traitName
 Next we describe the results of this literature search. Our database contains `r nrow(trait_long)` reported trait values from `r trait_long %>% pull(refID) %>% unique() %>% length()` unique sources. Of those sources, `r refs %>% filter(refID %in% unique(trait_long$refID), grepl('al Review', journal)) %>% nrow()` are from the Herpetological Review. 
 
 ```{r}
-trait_long %>% 
+kable(trait_long %>% 
   group_by(traitName, traitEvidenceCategory) %>% 
   count() %>% 
   group_by(traitName) %>% mutate(total_n=sum(n)) %>% 
   filter(n==max(n)) %>%
   mutate(per.top=round(n/total_n*100, 1)) %>%
-  arrange(traitEvidenceCategory)
+  arrange(traitEvidenceCategory),
+  caption='Number of traits and top evidence category for each trait, across all taxa.')
 ```
 ```{r}
 trait_long %>%
-  mutate(type=ifelse(traitName %in% c("Mass","CTmax","CTmin","Tpref"), 'phys','behavior')) %>%
-  count(type) %>%
-  mutate(per=n/sum(n))
+  filter(species %in% foc_taxa) %>%
+  mutate(type=ifelse(traitName %in% c("Mass","CTmax","CTmin","Tpref"),
+                     'phys','behavior')) %>%
+  group_by(type) %>%
+  summarize(n=n(),
+         n_species=n_distinct(species)) %>%
+  ungroup() %>% mutate(per=n/sum(n))
+```
+Calculations for taxa outside our focal taxa list
+```{r}
+trait_long %>% filter(!(species %in% foc_taxa)) %>% nrow() 
+trait_long %>% filter(!(species %in% foc_taxa)) %>% pull(species) %>% unique() %>% length()
+trait_long %>% filter(!(species %in% foc_taxa)) %>% 
+  distinct(species, traitName) %>% group_by(species) %>% 
+  count() %>% arrange(desc(n))
 ```
 
 Using this species specific approach (WoS & google), we found `r trait_long %>% filter(dataCollationType=='concentrated') %>% pull(refID) %>% unique() %>% length()` unique references that contained `r trait_long %>% filter(dataCollationType=='concentrated') %>% nrow()` reported trait values for our focal species. In entirety, we found `r trait_long %>% filter(species %in% foc_taxa) %>% nrow()` reported trait values for our focal species.
 
 ```{r sum stats, echo=F}
-kable(trait_long %>% filter(species %in% foc_taxa) %>% count(traitName) %>% arrange(desc(n)),
+kable(trait_long %>%
+        filter(species %in% foc_taxa) %>% count(traitName) %>% arrange(desc(n)),
       caption='Count of the Trait Values Found by the Type of the Trait, Restricted to the Focal Species.')
 ```
 
@@ -93,7 +102,9 @@ trait_total<-trait_long %>%
   tally() %>% ungroup() %>%
   arrange(desc(n)) %>%
   left_join(ls_trait_total, by='species')
-foc_taxa[which(!(foc_taxa %in% trait_total$species), useNames = T)]
+# identifying those without any trait data
+(mis_taxa<-foc_taxa[which(!(foc_taxa %in% trait_total$species), useNames = T)])
+
 ```
 
 ```{r, echo=F}
@@ -106,7 +117,7 @@ Thus in total, for the adult trait values, we found a median of `r trait_total %
 kable(trait_total %>% filter(n==max(n)|n==min(n)))
 ```
 
-We then investigated the distribution of reported trait values across life stages in the table below. 
+We then investigated the distribution of reported trait values across life stages in the table below. Of those labelled adult, `r trait_long %>% filter(lifeStage=='unknown') %>% nrow()`. 
 
 ```{r, echo=F}
 kable(trait_long %>%
@@ -116,20 +127,47 @@ kable(trait_long %>%
   # only 1 trait per species per lifeStage
   distinct(species, traitName, lifeStage,  .keep_all=T) %>%
   group_by(lifeStage) %>%
-  count() %>% arrange(desc(n)))
+  summarize(n=n(), n_spp=n_distinct(species)) %>% arrange(desc(n)))
 ```
 
-And finally, we investigated how conservation status might influence trait completeness. Below we investigate which species in our focal taxa group are of conservation concern for the IUCN and for the National Species of Greatest Conservation Need list. None of our focal species are included on the ESA. 
+I use the RCS data for the area of occupancy and for conservation status. *Lithobates sevosus* was not included in the species pool for the RCS analysis. So I will use the IUCN range map to identify which HUC12 are occupied and calculate its area of occupancy (using the same data inputs as DuBose et al. 2022. I also looked up its conservation status (07/01/2022).
 
-```{r, echo=F}
+```{r, eval=F}
+huc12<-readRDS('/home/tracidubose/huc12_wgs84_sf_02010323.rds')
+#IUCN range maps downloaded 10/2020
+iucn_lsev<-read_sf('/home/tracidubose/RCS_Anuran_input/ANURA/', 'ANURA')  %>%
+ filter(grepl('sevosus',binomial), # only range of Lithobates sevosus
+        grepl('Extant',legend)) # only the extant range
+# make both shapefiles in same crs and do a spatial join
+huc_keep<-iucn_lsev %>% st_transform(st_crs(huc12)) %>% st_join(huc12)
+# sum the area of the watersheds that touch/overlap this range
+huc_keep %>% distinct(huc12, .keep_all = T) %>%
+  pull(WSAREA) %>% sum()
+```
+
+```{r rcs data}
 # bringing in the RCS data to calculate area of occupancy
 rcs<-read_csv('C:/Users/Owner/Desktop/Git/National-RCS/Anuran_RCS_and_components.csv',
               show_col_types=F) %>% 
   filter(grepl('North', extent)) %>%
-  select(species, genus, family, IUCNcategory, ESA.Listing.Status, NatSGCN, AOO_WS_sqkm, RCS_WS)
-spocc<-rcs %>% filter(species %in% foc_taxa, IUCNcategory == 'NT') %>%
-  select(species, IUCNcategory, NatSGCN)
-kable(spocc)
+  select(species, genus, family, IUCNcategory, ESA.Listing.Status, NatSGCN, AOO_WS_sqkm, RCS_WS) %>%
+  # adding in Lithobates servosus
+  bind_rows(data.frame(species='Lithobates sevosus',
+                       genus='Lithobates', family='Ranidae',
+                       IUCNcategory='CE', ESA.Listing.Status='Endangered',
+                       NatSGCN = 'in =1 SWAP',
+                       AOO_WS_sqkm=737.8))
+```
+
+And finally, we investigated how conservation status might influence trait completeness. Below we investigate which species in our focal taxa group are of conservation concern for the IUCN, ESA, and for the National Species of Greatest Conservation Need list.  
+
+```{r, echo=F}
+spocc<-rcs %>% filter(species %in% foc_taxa, 
+                      IUCNcategory %in% c('NT', 'VU', 'EN','CE')|
+                        ESA.Listing.Status !='Not Listed') %>%
+  select(species, IUCNcategory, ESA.Listing.Status, NatSGCN) 
+kable(spocc, 
+      col.names = c('Species','IUCN status','ESA status', 'SGCN status'))
 ```
 
 ```{r, echo=F}
@@ -141,19 +179,19 @@ We can use a binomial test to see if this trait completeness is less than expect
 
 ```{r}
 # Lithobates areolatus
-binom.test(4,8)
-# Lithobates capito
-binom.test(1,8)
+binom.test(4,9)
+# Lithobates capito, Lithobates sevosus
+binom.test(2,9)
 ```
 
-```{r, fig.height=2, fig.width=2}
+```{r, fig.height=2, fig.width=4}
 library(ggrepel)
 trait_total %>%
   ggplot()+
   geom_histogram(aes(x=n), binwidth = 1)+
   geom_vline(data=. %>% filter(species %in% spocc$species), 
              aes(xintercept=n),
-             linetype='dashed', size=1.5)+
+             linetype='dashed', size=1)+
   geom_text_repel(data=. %>% filter(species %in% spocc$species), 
             aes(x=n+0.1, y=5.3, label=species))+
   scale_x_continuous('N Traits',
@@ -180,8 +218,7 @@ oc<-trait_long %>%
   filter(species %in% foc_taxa,
          traitName != 'Tforage_optim',
          lifeStage %in% c('adult','unknown')) %>%
-  group_by(species, family, traitName, refID) %>%
-  slice(1) %>%
+  distinct(species, family, traitName, refID) %>%
   group_by(species, family, traitName) %>%
   summarize(n=n(),
          refss=paste(refID, collapse=', '),
@@ -232,7 +269,6 @@ ggsave('../manuscript/summary_grid_figure.jpg',
 ```
 
 ```{r, fig.width=3.5, fig.height=6}
-library(maps);library(sf); library(MetBrewer)
 states<-st_as_sf(map('state', fill=T, plot=F))
 usa<-st_as_sf(map('usa', fill=T, plot=F))
 SE_states<-c('mississippi', 'georgia',
@@ -269,11 +305,11 @@ trait_hist<-trait_ref_ndf %>%
                                 'Tmerge','Activity'))) %>%
   ggplot()+
   geom_col(aes(y=TaxF, x=n, fill=TraitF), position='stack')+
-  draw_plot(se_inset, x=17.5, y=12, scale=15)+
+  draw_plot(se_inset, x=19.5, y=17, scale=22)+
   labs(y='',x='Reference count')+
   scale_fill_manual('Trait Name', values=met.brewer('Hiroshige')[-5])+
   scale_x_continuous(breaks=seq(0,25,5), 
-                     expand=c(0,0), limits = c(0,25))+
+                     expand=c(0.01,0.01), limits = c(0,30))+
   theme_classic()+
   theme(legend.position=c(.735,.20), 
         legend.text=element_text(size=9),
@@ -289,7 +325,7 @@ ggsave('../manuscript/F1_nref.jpg',
 
 ggsave(plot=grid.arrange(ocp,trait_hist, nrow=1),
        '../manuscript/summary_figure_combo.jpg',
-       width=7, height=6)
+       width=8, height=6)
 ```
 
 ## Comparison among taxonomic groups
@@ -382,11 +418,15 @@ gen_plot<-trait_count_rarity %>%
                      aesthetics=c('color','fill'))+
   theme_classic()+
   theme(legend.text = element_text(size=8),
-        legend.position='bottom')
-gen_plot
-
+        legend.position='bottom')+
+  guides(color=guide_legend(nrow=2, byrow=TRUE))
 library(cowplot)
 legend_b <- get_legend(gen_plot)
+ggsave(plot=plot_grid(gen_plot+theme(legend.position='none'),
+                      legend_b, ncol=1, rel_heights = c(1,.1)),
+       '../manuscript/genera_only_plot.jpg', width=3.5, height=3)
+
+
 plot_grid(plot_grid(gen_plot+theme(legend.position='none'), 
                     fam_plot, 
                     rel_widths = c(.55,.45), labels='AUTO'), 
@@ -444,7 +484,7 @@ kable(head(trait_ls_total %>% select(species, n, total_ls, n_ls)))
 
 The potential combinations of life stages are: `r unique(trait_ls_total$total_ls)`. 
 
-Based on the trait data, I think total possible trait completenes for all life stages would be `r 9+2+4+2+5`.
+Based on the trait data, I think total possible trait completenes for all life stages would be `r 9+2+4+3+5`.
 ```{r, echo=F, results='asis'}
 kable(trait_long %>% 
         filter(species %in% foc_taxa) %>%
@@ -468,7 +508,7 @@ ls_cor_plot<-trait_ls_total %>%
                  color=as.character(n_ls), shape=as.character(n_ls)),
              size=2, alpha=0.75)+
   geom_text_repel(data=. %>% ungroup() %>% 
-                    filter(max(n)==n | max(n_ls)==n_ls) %>%
+                    filter(max(n)==n) %>%
                     mutate(species=paste0("italic('",species,"')")),
                   aes(x=log10(AOO_WS_sqkm), y=n, label=species),
                   size=2.4, parse=T,
@@ -498,12 +538,12 @@ ggsave('../manuscript/F3_trait_aoo_corr.jpg', width=5, height=2.5)
 Below I do some data manipulation to help describe life stage stuff. `r trait_ls_total %>% filter(grepl('T', total_ls)) %>% nrow()` species had information for the tadpole life stage available.
 
 ```{r, echo=F}
-kable(trait_ls_total %>% filter(n_ls > 2) %>% select(species, n, total_ls),
+kable(trait_ls_total %>% filter(n_ls > 3) %>% select(species, n, total_ls),
       caption='Species with more than two life stages with trait values available')
 kable(trait_ls_total %>% 
-  mutate(n_ls_grp=ifelse(n_ls > 2 & !is.na(n_ls), 'more', 'less')) %>% 
+  mutate(n_ls_grp=ifelse(n_ls > 3 & !is.na(n_ls), 'more', 'less')) %>% 
   group_by(n_ls_grp) %>% summarize(min(AOO_WS_sqkm)),
-  caption='minimum AOO of species with > 2 life stages with trait values reported or < 2 life stages with trait values reported')
+  caption='minimum AOO of species with > 3 life stages with trait values reported or < 3 life stages with trait values reported')
 ```
 
 # Outside focal taxa
