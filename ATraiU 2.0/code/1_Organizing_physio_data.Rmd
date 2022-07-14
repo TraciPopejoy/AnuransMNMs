@@ -31,23 +31,34 @@ write_csv(all_trait_shts, paste0('../intermediate_results/RAW_concentrated_trait
                                  format(Sys.Date(), "%Y%m%d"),'.csv'))
 ```
 
+We increased the focal species in 2022. The below code adds a column for who double checked which trait values.
+
+```{r}
+all_trait_shts<-all_trait_shts %>%
+  mutate(checked=ifelse(taxa %in% c('Pseudacris kalmi','Pseudacris crucifer',
+                                    'Lithobates virgatipes','Lithobates sphenocephalus',
+                                    'Lithobates sevosus','Lithobates okaloosae',
+                                    'Lithobates kauffeldi','Lithobates heckscheri',
+                                    'Incilius nebulifer','Dryophytes femoralis',
+                                    'Dryophytes avivoca','Dryophytes andersonii',
+                                    'Acris blanchardi'),
+                        NA,'tpd/vc'))
+```
+
 I then fix some data entry issues, remove empty rows or rows with sources we aren't including, and remove traits we are not interested in. Traits removed were often collected pre-2020 and were not searched for otherwise, thus we don't include them in our database. Traits that were collected but not kept include: `r unique(all_trait_shts$Trait)[c(8,11:16)]` .
 
 ```{r}
 #replace N/A and n/a with NA
 all_trait_shts <- all_trait_shts %>%
   mutate(across(everything()), na_if(.,"N/A")) %>%
-  mutate(across(everything()), na_if(.,"n/a"))
-
-all_trait_shts_mod<-all_trait_shts %>%
+  mutate(across(everything()), na_if(.,"n/a")) %>%
           # remove other traits
-  filter(Trait %in% unique(all_trait_shts$Trait)[-c(8,11:16)], 
-         !is.na(Value), # remove empty rows
+  filter(!is.na(Value), # remove empty rows
          # remove non-published sources
          `Source file name` != 'Animal Diversity Web') 
 ```
 
-Then we load our tangentally collected traits. These include traits from chapter 8 and chapter 9 of Felden & Bru 199, traits listed in references found in the above taxa-focused search, and those identified within Herpetological Review 196 - 2012 issues. 
+Then we load our tangentially collected traits. These include traits from chapter 8 and chapter 9 of Felden & Bru 199, traits listed in references found in the above taxa-focused search, and those identified within Herpetological Review 196 - 2012 issues. 
 
 ```{r}
 # chapters 8 and 9 of the amphibian ecophysiology textbook
@@ -59,7 +70,7 @@ FB_trait_data<-read_sheet(FB_sheet$id, sheet="Table 9.2", col_types='c') %>%
   rename(Species_orig=Taxa)
 # traits found in references identified in taxa-focused search
 misc_sheet<-drive_find(shared_drive = "Anuran Physiological Trait Search", 
-           pattern="Misc")
+           pattern="Miscel")
 misc_trait_data<-read_sheet(misc_sheet$id, sheet='MiscFromLit', col_types='c')
 # traits found within Herpetological Review
 herp_rev_data<-read_sheet(misc_sheet$id, sheet='HerpReviewData', col_types='c')
@@ -143,7 +154,7 @@ kable(refs %>% slice_sample(n=4))
 This code combines all the trait information into one datasheet. I changed the collection method for species identified as *Pseudacris maculata*, which is not found within the southeastern United States. It was originally identified as *Pseudacris triseriata* but, after using Lemon et al. 2007 to check the taxonomic identities associated with *P. triseriata* trait values, none remained.
 
 ```{r}
-trait_db_raw<-all_trait_shts_mod %>%
+trait_db_raw<-all_trait_shts %>%
   rename(dataScientificName=taxa) %>%
   # Pseudacris maculata doesn't occur within the southeast 
   mutate(dataCollationType=ifelse(dataScientificName == 'Pseudacris maculata',
@@ -187,13 +198,13 @@ trait_db_raw %>%
   left_join(refs, by=c(`Source file name`="Source.file.name")) %>% 
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
           lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location) %>%
-  #filter(is.na(first_author)) %>% View() %>%
+  #filter(is.na(first_author)) %>% View()
   write_csv('../intermediate_results/denormalized_trait_db.csv')
 ```
 
 # Final Collation - Database Files Produced Here
 
-In the following tables, I often change column names to match ecological trait standards when possible. These standards are outlined at: [Ecological Trait-data Standard](https://ecologicaltraitdata.github.io/ETS/). First, we create a long dataframe, were each row is a unique trait value. This does not contain the superfluous columns that the denormalized trait database might have. 
+In the following tables, I often change column names to match ecological trait standards when possible. These standards are outlined at: [Ecological Trait-data Standard](https://ecologicaltraitdata.github.io/ETS/). First, we create a long dataframe, were each row is a unique trait value. This does not contain the superfluous columns that the denormalized trait database might have. We also reduce the species pool to only those that occur within the southeastern United States (our 40 focal species). 
 
 ```{r}
 trait_long<-trait_db_raw %>%
@@ -212,11 +223,19 @@ trait_long<-trait_db_raw %>%
          traitSource=`Source file name`, 
          traitEvidenceCategory=`Strength of Evidence`) %>%
   ungroup() %>% 
-  filter(!is.na(refID)) %>% #removing traits from websites
+  filter(!is.na(refID), # removing traits from websites
+         # removing traits we did not do specific trait searches for
+         !(traitName %in% c('per_surface_area', 'Thermal Perfomance Curve',
+                        'Standard Metabolic Rate', 'Metabolic Rate', 'Metabolism Rate',
+                        'Minimum Egg Development Temperature',
+                        'Maximum Egg Development Temperature', 'Water Loss Rate'))) %>% 
   # clean up sex column
   mutate(sex=ifelse(is.na(sex), 'unknown',sex)) %>%
   # remove transcription duplicates from the database
-  distinct(traitName, species, refID, traitValue, .keep_all=T) 
+  distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
+  # removing taxa not within the southeastern US
+  filter(species %in% gsub(' MNM traits', '', sp_files$name),
+         species != 'Pseudacris maculata', species != 'Anaxyrus punctatus')
 ```
 
 Interestingly, the following ways are used to describe trait variation within studies: `r trait_long$traitVariationType %>% unique()`.
@@ -251,10 +270,7 @@ tbif<-trait_long %>%
                                   T ~ lifeStage)) %>%
   group_by(species, lifeStage, traitName) %>%
   # remove extra traits
-  filter(!(traitName %in% c("Activity","Water Loss Rate",
-                        "Minimum Egg Development Temperature",
-                        "Maximum Egg Development Temperature",
-                        "Metabolic Rate")),
+  filter(traitName != 'Activity',
          lifeStage=='adult',
          traitValue != 'overwinters') %>% # to avoid warnings from as.numeric
   mutate(v_n=as.numeric(traitValue)) %>%
@@ -292,6 +308,18 @@ kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
     filter(species %in% c("Pseudacris crucifer","Lithobates clamitans","Anaxyrus fowleri")),
   digits=2)
 ````
+
+# Double Checked Stats -----
+
+```{r}
+trait_long %>% 
+  group_by(dataCollationType, checked) %>%
+  summarize(n=n(), .groups='drop') %>% mutate(per_n=round((n/sum(n)*100),1))
+```
+```{r}
+(130+322+65)*1.5/60
+(130+315+72)*1.5/60
+```
 
 # Outlier Analysis for QA/QC -----
 
@@ -356,5 +384,5 @@ trait_long %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', '), .groups='drop'),
             by=c('species','traitName','traitValue')) %>%
-  write_csv('../ATraiU2_full_2022JULY.csv')
+  write_csv('../ATraiU2_full_2022JULY3.csv')
 ```

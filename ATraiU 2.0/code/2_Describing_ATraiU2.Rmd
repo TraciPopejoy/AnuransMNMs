@@ -13,13 +13,9 @@ library(maps);library(sf)
 The purpose of this code is to describe the physiological trait database for the manuscript results. We start by bringing in the necessary trait table and references. We also identify our entire focal species list.
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022JULY.csv', show_col_types = F) %>%
-  filter(!(traitName %in% c("Water Loss Rate",
-                        "Minimum Egg Development Temperature",
-                        "Maximum Egg Development Temperature",
-                        "Metabolic Rate", "Metabolism Rate",
-                        'Tforage_optim'))) %>%
-  distinct(traitName, species, refID, traitValue, .keep_all=T) 
+trait_long<-read_csv('../ATraiU2_full_2022JULY3.csv', show_col_types = F) %>%
+  distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
+  filter(traitName != 'Tforage_optim')
 refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
 foc_taxa<-read.csv('../../focal_taxa.csv') %>% pull(species)
 ```
@@ -49,14 +45,6 @@ trait_long %>%
   summarize(n=n(),
          n_species=n_distinct(species)) %>%
   ungroup() %>% mutate(per=n/sum(n))
-```
-Calculations for taxa outside our focal taxa list
-```{r}
-trait_long %>% filter(!(species %in% foc_taxa)) %>% nrow() 
-trait_long %>% filter(!(species %in% foc_taxa)) %>% pull(species) %>% unique() %>% length()
-trait_long %>% filter(!(species %in% foc_taxa)) %>% 
-  distinct(species, traitName) %>% group_by(species) %>% 
-  count() %>% arrange(desc(n))
 ```
 
 Using this species specific approach (WoS & google), we found `r trait_long %>% filter(dataCollationType=='concentrated') %>% pull(refID) %>% unique() %>% length()` unique references that contained `r trait_long %>% filter(dataCollationType=='concentrated') %>% nrow()` reported trait values for our focal species. In entirety, we found `r trait_long %>% filter(species %in% foc_taxa) %>% nrow()` reported trait values for our focal species.
@@ -117,7 +105,7 @@ Thus in total, for the adult trait values, we found a median of `r trait_total %
 kable(trait_total %>% filter(n==max(n)|n==min(n)))
 ```
 
-We then investigated the distribution of reported trait values across life stages in the table below. Of those labelled adult, `r trait_long %>% filter(lifeStage=='unknown') %>% nrow()`. 
+We then investigated the distribution of reported trait values across life stages in the table below. Of those considered adult in this analysis, `r trait_long %>% filter(lifeStage=='unknown') %>% nrow()` were not clearly reported. 
 
 ```{r, echo=F}
 kable(trait_long %>%
