@@ -42,7 +42,8 @@ all_trait_shts<-all_trait_shts %>%
                                     'Incilius nebulifer','Dryophytes femoralis',
                                     'Dryophytes avivoca','Dryophytes andersonii',
                                     'Acris blanchardi'),
-                        NA,'tpd/vc'))
+                        `Checked by`,'tpd/vc')) %>%
+  select(-`Checked by`)
 ```
 
 I then fix some data entry issues, remove empty rows or rows with sources we aren't including, and remove traits we are not interested in. Traits removed were often collected pre-2020 and were not searched for otherwise, thus we don't include them in our database. Traits that were collected but not kept include: `r unique(all_trait_shts$Trait)[c(8,11:16)]` .
@@ -105,6 +106,7 @@ name_backbone(name='Boana riojana', rank='species', kingdom = 'animals') %>%
   select(canonicalName, scientificName, family, genus, species, usageKey)
 taxa_key <- read.csv('../ATraiU2_taxonomic_key_2022JULY.csv')
 taxa_key_start[!(taxa_key_start$dataScientificName %in% taxa_key$dataScientificName),]
+taxa_key[taxa_key$dataScientificNam!=taxa_key$canonicalName,]
 ```
 
 # Build Reference List ----
@@ -195,7 +197,7 @@ trait_db_raw %>%
   #remove traits that have been duplicated on accident
   distinct(species, Trait, `Life Stage`, 
            Sex, Value, Units, Location, Acclimation, .keep_all=T) %>%
-  left_join(refs, by=c(`Source file name`="Source.file.name")) %>% 
+  left_join(refs, by=c(`Source file name`="traitSource")) %>% 
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
           lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location) %>%
   #filter(is.na(first_author)) %>% View()
@@ -208,20 +210,21 @@ In the following tables, I often change column names to match ecological trait s
 
 ```{r}
 trait_long<-trait_db_raw %>%
-  left_join(refs, by=c(`Source file name`="Source.file.name")) %>% 
+  rename(traitSource=`Source file name`) %>%
+  left_join(refs, by='traitSource') %>% 
   # remove columns that are superfluous for larger tables
   select(-dataScientificName, 
          -`Search Terms Used`, -DOI, -Notes, -page,-order,-Season,
-         -doi, -citation,-journal,-issue, -year,-second_author,
-         -ends_with('author'), -Acclimation, -`Original Source`) %>%
+         -doi, -citation, -journal,-issue, -year,
+         -ends_with('author'), -`Original Source`) %>%
   # rename columns to match ecological trait standards when possible
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
          lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location,
          # these just clarify & match style of above standards
          traitVariation=`Variation of Value`,
          traitVariationType = `Measure of Variation`,
-         traitSource=`Source file name`, 
-         traitEvidenceCategory=`Strength of Evidence`) %>%
+         traitEvidenceCategory=`Strength of Evidence`,
+         traitAcclimation=Acclimation) %>%
   ungroup() %>% 
   filter(!is.na(refID), # removing traits from websites
          # removing traits we did not do specific trait searches for
@@ -253,10 +256,10 @@ tchar<-trait_long %>%
          activity=tolower(traitValue)) %>%
   ungroup() %>%
   dplyr::select(family, genus, species, refID, traitSource, activity, record) %>%
-  pivot_wider(names_from=activity, values_from=record) %>%
+  pivot_wider(names_from=activity, values_from=record) %>% 
   group_by(species) %>%
   summarize(refIDs_a=paste(unique(refID), collapse=', '),
-            across('nocturnal':'arrhythmic', sum, na.rm=T)) %>%
+            across(c('nocturnal', 'diurnal','crepuscular','arrhythmic'), sum, na.rm=T)) %>%
   mutate(lifeStage='adult')
 ```
 ```{r, echo=F}
@@ -298,7 +301,7 @@ full_join(tchar, tbif, by=c('species','lifeStage')) %>%
   mutate(refIDs=paste(refIDs_n, refIDs_a, sep=', ')) %>%
   select(-refIDs_a, -refIDs_n, -lifeStage) %>%
   select(species, everything()) %>%
-  write.csv('../ATraiU2_summary_values_2022JULY.csv')
+  write.csv('../ATraiU2_summary_values_2022AUG.csv', row.names = F)
 ```
 ```{r, echo=F}
 kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
@@ -315,10 +318,6 @@ kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
 trait_long %>% 
   group_by(dataCollationType, checked) %>%
   summarize(n=n(), .groups='drop') %>% mutate(per_n=round((n/sum(n)*100),1))
-```
-```{r}
-(130+322+65)*1.5/60
-(130+315+72)*1.5/60
 ```
 
 # Outlier Analysis for QA/QC -----
@@ -384,5 +383,6 @@ trait_long %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', '), .groups='drop'),
             by=c('species','traitName','traitValue')) %>%
-  write_csv('../ATraiU2_full_2022JULY3.csv')
+  select(-checked) %>%
+  write_csv('../ATraiU2_full_2022AUG1.csv')
 ```

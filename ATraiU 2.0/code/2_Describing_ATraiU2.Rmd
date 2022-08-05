@@ -64,6 +64,9 @@ trait_long %>%
   distinct(species, traitName) %>%
   group_by(traitName) %>%
   count() %>% arrange(desc(n))
+trait_long %>% filter(lifeStage%in% c('adult','unknown')) %>%
+  filter(species %in% c('Pseudacris fouquettei','Pseudacris brachyphona')) %>%
+  select(species, traitName, lifeStage, traitSource)
 trait_long %>% 
   filter(species %in% foc_taxa, 
          lifeStage %in% c('adult','unknown'),
@@ -296,8 +299,8 @@ trait_hist<-trait_ref_ndf %>%
   draw_plot(se_inset, x=19.5, y=17, scale=22)+
   labs(y='',x='Reference count')+
   scale_fill_manual('Trait Name', values=met.brewer('Hiroshige')[-5])+
-  scale_x_continuous(breaks=seq(0,25,5), 
-                     expand=c(0.01,0.01), limits = c(0,30))+
+  scale_x_continuous(breaks=seq(0,35,5), 
+                     expand=c(0.01,0.01), limits = c(0,35))+
   theme_classic()+
   theme(legend.position=c(.735,.20), 
         legend.text=element_text(size=9),
@@ -310,7 +313,8 @@ trait_hist<-trait_ref_ndf %>%
 trait_hist
 ggsave('../manuscript/F1_nref.jpg',
        width=3.5, height=6)
-
+```
+```{r, eval=F}
 ggsave(plot=grid.arrange(ocp,trait_hist, nrow=1),
        '../manuscript/summary_figure_combo.jpg',
        width=8, height=6)
@@ -342,6 +346,29 @@ trait_count_rarity %>%
 kruskal.test(n~family, data=trait_count_rarity)
 ```
 
+First I am going to get the phylopic information down through the API.
+
+```{r}
+# getting phylopic information
+# tried to use r package api but couldn't get it to work past examples
+
+# Hyla versicolor - Will Booker
+hyla <- "../manuscript/hyla.png"
+# Incilius valliceps - Jose Carlos Arenas-Monroy
+incilius<-"../manuscript/incilius.png"
+# Lithobates catesbeianus - Chuanixn Yu
+lithobates<-"../manuscript/lithobates.png"
+# Anaxyrus woodhousii - Michael Scroggie
+anaxyrus<-"../manuscript/anaxyrus.png"
+# Pseudacris maculata - Beth Reinke
+pseudacris<-"../manuscript/pseudacris.png"
+# Hypopachus variolosus - Jose Carlos Arenas-Monroy
+microhyla<-"../manuscript/gastrophryne.png"
+# Spea multiplicata - Jose Carlos Arenas-Monroy
+spea<-"../manuscript/scaphiopus.png"
+library(magick)
+```
+
 ```{r, echo=F}
 gen_pal<-met.brewer('Veronese', n=length(unique(trait_count_rarity$family)),
                     type='discrete')
@@ -363,8 +390,14 @@ ggplot(aes(x=n, y=famF, fill=family))+
              pch=1, color='black', size=2)+
   #geom_text(data=. %>% group_by(famF) %>% count(),
   #          aes(x=9.3,label=n), color='black')+
+  draw_image(hyla,  x = 8.5, y = 0.5, scale = 1)+
+  draw_image(lithobates,  x = 8.5, y = 1.5, scale = 1)+
+  draw_image(microhyla,  x = 8.5, y = 2.5, scale = 1)+
+  draw_image(anaxyrus,  x = 8.5, y = 3.5, scale = 1)+
+  draw_image(spea,  x = 8.5, y = 4.5, scale = 1)+
   labs(y='Family')+
-  scale_x_continuous('Trait Completeness', breaks=seq(0,8,2))+
+  scale_x_continuous('Trait Completeness', breaks=seq(0,8,2),
+                     limits = c(0,9))+
   scale_color_manual('Family', values=gen_pal, 
                      aesthetics = c('color','fill'))+
   theme_classic()+
@@ -406,8 +439,10 @@ gen_plot<-trait_count_rarity %>%
                      aesthetics=c('color','fill'))+
   theme_classic()+
   theme(legend.text = element_text(size=8),
-        legend.position='bottom')+
-  guides(color=guide_legend(nrow=2, byrow=TRUE))
+        legend.title = element_text(size=8),
+        legend.background = element_rect(fill=NA, color=NA),
+        legend.position='bottom')
+
 library(cowplot)
 legend_b <- get_legend(gen_plot)
 ggsave(plot=plot_grid(gen_plot+theme(legend.position='none'),
@@ -415,11 +450,10 @@ ggsave(plot=plot_grid(gen_plot+theme(legend.position='none'),
        '../manuscript/genera_only_plot.jpg', width=3.5, height=3)
 
 
-plot_grid(plot_grid(gen_plot+theme(legend.position='none'), 
-                    fam_plot, 
-                    rel_widths = c(.55,.45), labels='AUTO'), 
-          legend_b, ncol = 1, rel_heights = c(1, .1))
-ggsave('../manuscript/F2_tax_comp.jpg', 
+plot_grid(plot_grid(gen_plot+theme(legend.position='none', axis.title = element_text(size=8)), 
+                    fam_plot+theme(axis.title = element_text(size=8)), labels='AUTO'), 
+          legend_b, ncol = 1, rel_heights = c(1.3, .1))
+ggsave('../manuscript/F2_tax_comp_wtax.jpg', 
        width = 6.5, height = 2.5)
 ```
 ## Compare Rarity with Trait Completeness
