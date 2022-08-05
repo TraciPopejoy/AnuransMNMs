@@ -1,209 +1,237 @@
-library(tidyverse);library(sf);library(stars)
-#STEPS
-# identify study extent
-library(maps)
-va<-st_as_sf(map('state','virginia', fill=T, plot=F)) %>%
+---
+title: "Running Multiple Mechanistic Niche Models"
+author: "TP DuBose"
+date: "7/14/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
+```
+
+First I identify study extent
+
+```{r}
+va<-st_as_sf(map('state',c('virginia','north carolina','south carolina','georgia',
+                           'florida'), fill=T, plot=F)) %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
 # create raster of study extent
-st_crs(va)
-va_r<-st_rasterize(va, dx=50, dy=50) %>% #turn into a raster
-  st_as_sf(as_points = FALSE, merge = FALSE) #turn into a polygon
+va_r<-st_rasterize(va, dx=70, dy=70) %>% #turn into a raster
+  st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
+                       rowid_to_column() # add an id column
+```
 
-traits<-read.csv('ATraiU 2.0/ATraiU2_summary_values_2022JAN.csv')
-names(traits)
-traits_used <- traits %>% filter(species %in% c('Anaxyrus americanus','Lithobates clamitans'))
+Next, I'm going to identify the points I want to run the models for. 
+```{r}
+test_spp<-c('Dryophytes chrysoscelis','Pseudacris crucifer','Lithobates catesbeianus')
+anuran_pts<-NULL
+for(s in test_spp){
+  anuran_pts<-bind_rows(anuran_pts,
+                      read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
+                                 dplyr::select(source, species, Longitude, Latitude,
+                                               coordinatePrecision, elevation, year))
+}
+va_pts<-anuran_pts %>% st_as_sf(coords=c('Longitude','Latitude'), 
+                                crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(va_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+    filter(!is.na(rowid)) %>% # remove points outside of our sample grid
+    group_by(rowid, species)
+pts_to_run<-NULL
+for(i in sample(1:nrow(va_r),20)){
+  pt_rw<-va_pts %>% filter(rowid==i)
+  ptd<-pt_rw %>% st_distance() %>% rowSums()
+  pts_to_run<-bind_rows(pts_to_run,
+                        bind_cols(pt_rw[which(ptd==min(ptd)),],
+                                  t_dist=min(ptd),
+                                  spp_all=paste(unique(pt_rw$species), collapse=', ')))
+}
+pts_to_run %>% ggplot()+geom_sf(data=va_r %>% st_transform(st_crs(va_pts))) + 
+  geom_sf(aes(color=species))+theme_classic()
+write_sf(pts_to_run, 'microclimate_data/points_ran.shp', quiet=T)
+va_pts_df <- pts_to_run %>% st_coordinates() %>% 
+  bind_cols(rowid = pts_to_run$rowid, spp_all=pts_to_run$spp_all)
+```
 
-imp_traits <- read.csv('imputed_traits_041922.csv') %>%
-  select(species, variable, Yes) %>%
-  pivot_wider(names_from=variable, values_from=Yes)
+Next I bring in the traits we will use to create the models.
 
-# run microclimate on points
-library(NicheMapR)
+```{r}
+traits<-read.csv('input_data/inputed_physio_traits.csv') %>% 
+  left_join(read.csv('ATraiU 2.0/ATraiU2_summary_values_2022JULY.csv') %>% 
+              dplyr::select(species, nocturnal, diurnal, crepuscular) %>%
+              mutate(across(-species, ~ifelse(.x > 0,1,0)))) %>%
+  mutate(across(c(s.fossorial,s.arboreal), ~as.numeric(.x)))
+kable(traits %>% sample_n(3), digits=2)
+```
+
+Then we need to chose a microclimate model as our input into the mechanistic niche model. To speed up the microclimate models, I use the code below, created by Mike Kearney and shared through the NicheMapR google group, to both download the NCEP data files and to convert it so that space is easier to query than time (source link)[https://groups.google.com/g/nichemapr/c/nOmFNhKTFrM/m/xTNL-GJ_AQAJ]. 
+
+```{r download ncep, eval=F}
+# Code by Mike Kearney!
+library(curl)
+years <- seq(2019,2021)
+vars <- c('tmax.2m.gauss.','dswrf.sfc.gauss.', 'prate.sfc.gauss.', 'vwnd.10m.gauss.',
+          'uwnd.10m.gauss.', 'air.2m.gauss.', 'tmin.2m.gauss.', 'shum.2m.gauss.',
+          'pres.sfc.gauss.', 'dlwrf.sfc.gauss.', 'ulwrf.sfc.gauss.', 'tcdc.eatm.gauss.')
+for(year in years){
+  for(j in 1:length(vars)){
+    curl_download(paste0("ftp://ftp.cdc.noaa.gov/Datasets/ncep.reanalysis2/gaussian_grid/",vars[j],year, ".nc"), 
+                  paste0("../ncep_data/",vars[j],year, ".nc"),quiet=TRUE, mode="wb")   
+  }
+}
+
+library(ncdf4)
+dir2do <- "../ncep_data/"
+setwd(dir2do)
+files<-list.files()
+files<-files[grep(".nc", x = files)]
+vars4 <- c("tmin", "tmax", "air", "shum", "uwnd", "vwnd")
+vars3 <- c("pres", "tcdc", "dswrf", "dlwrf", "ulwrf", "prate")
+
+allvars <- c(vars4, vars3)
+
+for(i in 1:length(files)){
+  filenm <- files[i]
+  orig <- nc_open(filenm)
+  t<-ncvar_get(nc = orig, varid = "time", start = 1, count = -1)
+  
+  varid <- names(orig$var)[which(names(orig$var) %in% allvars)]
+  
+  if(varid %in% vars3){
+    start <- c(1,1,1) # compose the start location vector for getting the data out of the ncdf file for this location
+    count <- c(-1,-1,-1) # how much data are wanted? (-1 means all)
+  }else{
+    start <- c(1,1,1,1) # compose the start location vector for getting the data out of the ncdf file for this location
+    count <- c(-1,-1,-1,-1) # how much data are wanted? (-1 means all)
+  }
+  
+  data <- as.numeric(ncvar_get(orig, varid = varid, start = start, count)) # get the data
+  lon<-ncvar_get(nc = orig, varid = "lon", start = 1, count = -1) # longitudes
+  lat<-ncvar_get(nc = orig, varid = "lat", start = 1, count = -1) # latitudes
+  t2 <- ncdim_def(name = "time", units = " hours since 1800-1-1 00:00:0.0", vals = t, unlim=FALSE) # define a time variable
+  lon2 <- ncdim_def(name = "lon", units = "degrees_east", vals = lon, unlim=FALSE) # define a longitude variable
+  lat2 <- ncdim_def(name = "lat", units = "degrees_north", vals = lat, unlim=FALSE) # define a latitude variable
+  att<-ncatt_get(orig, varid, attname=NA, verbose=FALSE) # get attributes from original file
+  if(varid %in% vars4){
+    level<-ncvar_get(nc = orig, varid = "level", start = 1, count = -1) # levels
+    level2 <- ncdim_def(name = "level", units = "m", vals = level, unlim=FALSE) # define a latitude variable
+  }
+  
+  
+  if(varid %in% vars3){
+    var1 <- ncvar_def(name = varid, units = att$units, dim = list(lon2,lat2,t2), missval = att$missing_value, longname = att$long_name, prec='float') # define the variable
+  }else{
+    var1 <- ncvar_def(name = varid, units = att$units, dim = list(lon2,lat2,level2,t2), missval = att$missing_value, longname = att$long_name, prec='float') # define the variable
+  }
+  
+  vars <- list(var1) # get variable definition
+  file2<-gsub('.nc', replacement = '_time2.nc', x = filenm) # make a new file name
+  file3<-gsub('.nc', replacement = '_time.nc', x = filenm) # make a new file name
+  ncnew <- nc_create(file2,vars) # create a new ncdf file to put the data in
+  ncvar_put(ncnew,var1,data) # put the data in
+  nc_close(ncnew) # close the new file
+  if(varid %in% vars3){
+    cmd<-paste0("ncpdq -a lon,lat,time ",file2," ",file3) # command for ncpdq - permute to reverse order
+  }else{
+    cmd<-paste0("ncpdq -a lon,lat,level,time ",file2," ",file3) # command for ncpdq - permute to reverse order
+  }
+  
+  system(cmd) # run ncpdq
+  
+  file.remove(file2) # delete the temporary file
+}
+```
+
+We then need to run microclimate and ectotherm models for many points across the landscape. Ideally this will be at the resolution of the environmental datasets. The NicheMapR team has explored how ordinary kringing can be used to interpolate microclimate data to a physiological parameter (article link here)[https://onlinelibrary-wiley-com.ezproxy.lib.vt.edu/doi/10.1111/jbi.13152]. In 2020, there was a discussion of using rasters to speed processing for large geographic extents (thread here)[https://groups.google.com/g/nichemapr/c/FNzXsigRdmk/m/7z_4-rBaBgAJ]
+
+```{r ectotherm for loop, eval=T}
+# ectotherm for loop shown here.
+```
+
+
+```{r}
 ecto_out<-NULL
-start.time<-Sys.time()
-for(spp in c('Anaxyrus americanus','Lithobates clamitans')[1]){
-  # idea: use one point per raster; point will be real occurrence
-  anax<-read.csv(paste0('../National-RCS/data/occ_data/',spp,'_20210330.csv')) %>%
-    st_as_sf(coords=c('Longitude','Latitude'), 
-             crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84"))
-  anax_1per<-st_join(anax, va_r %>% 
-                       st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84") %>%
-                       rowid_to_column()) %>%
-    filter(!is.na(rowid)) %>%
-    group_by(rowid) %>% sample_n(1)
-  #print(ggplot()+
-  #        geom_sf(data=va_r)+
-  #        geom_sf(data=anax_1per))
-  spp_code<-paste0(substr(gsub('\\ .*','',spp),1,2),'_', 
-                   substr(gsub('.*\\ ','',spp),1,4))
-  va_pts<-anax_1per %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84") %>%
-    st_coordinates()
-  write.csv(va_pts, paste0('micro_climate_outputs/',spp,'points_run.csv'))
-  
-  # pull species traits
-  spp_traits<-imp_traits %>% filter(species==spp) %>%
-    left_join(traits_used %>% dplyr::select(species:crepuscular))
-  
-  #micro_clim_summary<-NULL
-  for(i in 1){
-    #run the micro climate data at each row
-    micro<-micro_usa(loc = c(va_pts[i,1],va_pts[i,2]),
-                     dstart = "01/01/2020", dfinish = "31/12/2020", 
-                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50,  100,  200), #cm
-                     minshade = 0, maxshade = 90, runshade=1,
-                     writecsv = 1, save = 2,
-                     Usrhyt = 0.01)
-    #micro_clim_summary<-bind_rows(micro_clim_summary,
-    #                              data.frame(point_lat=micro$longlat[2],
-    #                                         point_long=micro$longlat[1],
-    #                                           for_i=i,
-    #                                          elevation=micro$elev,
-    #                                         max_rain=max(micro$RAINFALL),
-    #                                        max_1cm_temp=max(micro$metout[,3]),
-    #                                       max_2m_temp=max(micro$metout[,4])))
-    ecto<-ectotherm(Ww_g=spp_traits["Mass"], 
-                    CT_max=spp_traits["CTmax"], 
-                    CT_min=spp_traits["CTmin"], 
-                    T_pref=spp_traits["Tpref"],
-                    diurn=spp_traits["diurnal"],
-                    nocturn=spp_traits["nocturnal"],
-                    crepus=spp_traits["crepuscular"],
-                    burrow=1,
-                    climb=0,
-                    shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
-                    maxdepth = 2, #maximum depth of the burrow
-                    T_F_min=19,
-                    T_F_max=35,
-                    T_RB_min=spp_traits["Tmerge"],
-                    T_B_min=spp_traits["Tmerge"])
-    #saveRDS(ecto,
-    #        paste0('micro_climate_outputs/PT_row',
-    #               u,'ecto.rds'))
-    # quantify   
-    body_temps<-ecto$environ[,1:5]
-    ecto_out<-bind_rows(ecto_out,
+for(rw in 1:10){
+for(k in test_spp){
+  if(k %in% gsub('!','', gsub('.rds','', 
+                              list.files(paste0('microclimate_data/pt',rw,'/'), pattern='.rds')))){
+  e1<-readRDS(paste0('microclimate_data/pt', rw, '/!', k, '.rds'))
+  body_temps<-e1$environ[,1:5]
+  ecto_out<-bind_rows(ecto_out,
                         body_temps %>% as_tibble() %>%
-                          mutate(hot_tsm=as.numeric(spp_traits["CTmax"])-TC) %>%
-                          filter(hot_tsm < 0) %>%
-                          summarize(n_above=n(),
+                          mutate(hot_tsm=as.numeric(spp_traits["CTmax"])-TC) %>% 
+                          group_by(DOY) %>% 
+                          mutate(dayrange=max(TC)-min(TC)) %>%
+                          ungroup() %>%
+                          summarize(n_total=n(),
+                                    n_above=sum(hot_tsm < 0),
                                     max_TC=max(TC),
                                     tsm=min(hot_tsm),
-                                    point=i,
-                                    X=va_pts[i,1],
-                                    Y=va_pts[i,2],
-                                    species=spp))
-    
-    print(paste(i, 'of', nrow(va_pts)))
+                                    max_dayrange=max(dayrange),
+                                    avg_dayrange=mean(dayrange),
+                                    X=as.numeric(va_pts_df[rw,1]),
+                                    Y=as.numeric(va_pts_df[rw,2]),
+                                    species=k,
+                                    rowid=rw))
   }
-  #assign(paste0(spp_code,'_ecto_out'), ecto_out)
-  end.time<-Sys.time()
 }
-end.time-start.time
-#1152
+}
+ecto_out
+```
 
-View(ecto_out)
+```{r}
+ecto_out %>%
+  st_as_sf(coords=c('X','Y'),
+           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  ggplot()+geom_sf(data=va_r, fill=NA)+
+  geom_sf(aes(fill=tsm), pch=21, size=3)+
+  facet_wrap(~species)+theme_classic()+
+  scale_fill_gradient2('Warming\nTolerance')
+ggsave('results/thermal safety margin space.jpg', width=6, height=3)
 
-
-plot_df<-ecto_out %>% 
-  st_as_sf(coords=c('X','Y'),crs="+proj=longlat +ellps=WGS84 +datum=WGS84")
-library(MetBrewer)
-plot_df %>%
-  mutate(tsm1=ifelse(!is.finite(tsm),0,tsm)) %>%
-  ggplot()+
-  geom_sf(data=va_r, fill=NA)+
-  geom_sf(aes(color=tsm))+
-  facet_wrap(~species)+
-  theme_classic()+
-  scale_color_gradientn('Thermal\nSafety\nMargin',
-                       colors=met.brewer('Hiroshige'))+
-  theme(axis.text=element_text(size=6))
 library(cowplot)
-plot_grid(plot_df %>% ggplot()+
-            geom_sf(data=va_r)+
-            geom_sf(aes(color=tsm)),
-          plot_df %>% ggplot()+
-            geom_sf(data=va_r)+
-            geom_sf(aes(color=n_above)))
-  
-se<-st_as_sf(map('state',c('mississippi', 'georgia',
-                           'florida','south carolina', 'north carolina', 'virginia',
-                           'alabama', 'tennessee'), fill=T, plot=F)) %>%
-  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
-ggplot()+geom_sf(data=se)
-# create raster of study extent
-se_r<-st_rasterize(se, dx=50, dy=50) %>% #turn into a raster
-  st_as_sf(as_points = FALSE, merge = FALSE)
-ggplot()+geom_sf(data=se_r)
-nrow(se_r)
-
-
-### nice image for SAS presentation----
-
-
-traits<-read.csv('ATraiU 2.0/ATraiU2_summary_values_2022JAN.csv')
-names(traits)
-View(traits)
-traits_used <- traits %>% filter(species %in% c('Anaxyrus americanus','Lithobates clamitans', 'Scaphiopus holbrookii'))
-all_results<-NULL
-
-longlat <- c(-80.41, 37.23)
-micro <- micro_global(loc = longlat,
-                      timeinterval = 12)
-for(i in 1:3){
-  ecto<-ectotherm(Ww_g=traits_used[i,"Mass"], 
-            CT_max=traits_used[i,"CTmax"], 
-            CT_min=-1, 
-            T_pref=traits_used[i,"Tpref"],
-            diurn=traits_used[i,"diurnal"],
-            nocturn=traits_used[i,"nocturnal"],
-            crepus=traits_used[i,"crepuscular"],
-            burrow=1,
-            climb=0,
-            shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
-            maxdepth = 2, #maximum depth of the burrow
-            T_F_min=max(traits_used[i,"Tmerge"],
-                        ifelse(is.na(traits_used[i,"Tforage_min"]), 15,
-                            traits_used[i,"Tforage_min"])),
-            T_F_max=ifelse(is.na(traits_used[i,"Tforage_max"]), 20,
-                           traits_used[i,"Tforage_max"]),
-            T_RB_min=traits_used[i,"Tmerge"],
-            T_B_min=traits_used[i,"Tmerge"])
-  new_results<-ecto$environ %>% as_tibble() %>%
-    mutate(species=traits_used[i,"species"])
-  # save the changes in the outcome
-  all_results<-bind_rows(all_results, new_results)
-}
-
-head(all_results)
-library(lubridate)
-body_temp<-as_tibble(all_results) %>%
-  mutate(date_x=as_date(DOY-1, origin='2019-01-01'),
-         day_time=ymd_h(paste0(date_x, " ", TIME))) 
-#body_temp %>% select(YEAR, DOY, TIME, date_x, day_time)
-#body_temp %>% pull(date_x) %>% unique()
-body_temp %>%
-  filter(day_time<'2019-09-01 0:00' & day_time > '2019-08-01 0:00') %>%
+plot_grid(ecto_out %>%
+  group_by(rowid) %>%
+  summarize(n_spp=n_distinct(species),
+            wt_mean=mean(tsm),
+            wt_sd=sd(tsm)) %>%
+  mutate(new_rowid=va_pts_df$rowid[1:10]) %>%
+  right_join(va_r, by=c('new_rowid'='rowid')) %>% 
   ggplot()+
- # geom_point(aes(x=TIME, y=TC, shape=as.character(ACT)), alpha=0.4)+
-  geom_line(aes(x=TIME, y=TC, 
-                color=species, group=species),
-            size=1.5, alpha=0.4)+
-  geom_hline(data=traits_used,
-             aes(yintercept=CTmax, color=species),
-             size=1.3, linetype='dashed')+
-  ggtitle('a day in August in Blacksburg')+
-  scale_color_viridis_d(name='Species')+
-  scale_y_continuous('Body Temperature °C')+
-  scale_x_continuous('Hour of the Day',limits=c(0,23))+
-  #scale_shape('Activity', labels=c('inactive','basking', 'foraging'))+
+  geom_sf(aes(fill=n_spp, geometry=geometry))+
+  scale_fill_viridis_c('n\nspecies')+
+    theme_void(),
+  ecto_out %>%
+  group_by(rowid) %>%
+  summarize(n_spp=n_distinct(species),
+            wt_mean=mean(tsm),
+            wt_sd=sd(tsm)) %>%
+  mutate(new_rowid=va_pts_df$rowid[1:10]) %>%
+  right_join(va_r, by=c('new_rowid'='rowid')) %>% 
+  ggplot()+
+  geom_sf(aes(fill=wt_mean, geometry=geometry))+
+  scale_fill_gradient2('Warming\nTolerance')+
+    theme_void())
+
+ggsave('results/assemblage tolerance space.jpg', width=6, height=3)
+```
+
+```{r}
+ecto_out %>% group_by(species) %>%
+  mutate(ptdist=max(`Y`)-`Y`) %>%
+  ggplot()+
+  geom_hline(yintercept=0)+
+  geom_smooth(aes(x=ptdist, y=tsm, color=species, fill=species), method='lm', level=.8)+
+  geom_point(aes(x=ptdist, y=tsm, color=species), size=2, alpha=.5)+
+  labs(y='Warming Tolerance (deg C)',x='Distance from species maximum Latitude (deg))')+
   theme_classic()+
-  theme(plot.title = element_text(hjust=0.5),
-        strip.text = element_blank(),
-        strip.background = element_blank(),
-        legend.position='bottom',
-        legend.text = element_text(face='italic'))
+  theme(axis.title = element_text(size=8),
+        axis.text=element_text(size=8))
+ggsave('results/tsm_lat_gradient2.jpg', width = 4, height=3)
+
+```
 
 
+```{r grid test, echo=F, eval=F}
 # seeing if within grid matters that much 
 bind_rows(
 pt1_micro<-micro_usa(loc=c(-77.2233, 37.1507))
@@ -228,3 +256,4 @@ st_sfc(st_point(c(-77.2233, 37.1507)),
        crs=4326) %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs")) %>%
   st_distance()
+```

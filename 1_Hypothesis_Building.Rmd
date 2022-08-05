@@ -1,0 +1,239 @@
+---
+title: "Hypothesis Building"
+author: "TP DuBose"
+date: "07/22/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse); library(maps); library(sf); library(stars); 
+library(knitr); library(scales)
+library(NicheMapR); library(cowplot); library(MetBrewer)
+```
+
+
+# Information about intraspecific trait variation
+
+How does range size correlate with trait variation? Our database does not record the number of animals tested, so the estimate of variation is approximate. I did incorporate estimates of trait variation from individual studies that reported either standard error or standard deviation by assuming they had the same number of animals tested. When no variance estimate was available or it was not standard deviation or standard error, I use a variance of 0.1 to incorporate that trait value. A generalized linear model with a quasi-Poisson link shows the general trend of the data and each point represents a single species. 
+
+```{r trait var, warning=F, message=F}
+# bring in area of occurrence for comparisons
+rcs<-read_csv('C:/Users/Owner/Desktop/Git/National-RCS/Anuran_RCS_and_components.csv',
+              show_col_types=FALSE) %>% 
+  filter(grepl('North', extent)) %>%
+  select(species, genus, family, AOO_WS_sqkm, RCS_WS) %>%
+  mutate(rankRCS=91-rank(RCS_WS)) %>%
+  # manually adding in 'Lithobates sevosus' information
+  bind_rows(data.frame(species='Lithobates sevosus', 
+                       genus='Lithobates',family='Ranidae',
+                       AOO_WS_sqkm=737.8, RCS_WS=1.0001))
+# read in the full database
+trait_phy_f<-read.csv('ATraiU 2.0/ATraiU2_full_2022JULY3.csv') %>%
+  filter(lifeStage %in% c('adult','unknown'),
+         traitName %in% c('Tmerge','CTmax','CTmin','Tpref')) %>%
+  # only keeping trait values for species with 3 or more essential traits
+  group_by(species) %>%
+  mutate(n_traits=n_distinct(traitName)) %>%
+  filter(n_traits >2) %>% ungroup()
+# calculate trait variance
+trait_var_nr<-trait_phy_f %>%
+  group_by(species, traitName) %>%
+  # rough estimate of trait variation, 
+  mutate(traitMean=mean(as.numeric(traitValue)),
+         traitDif=(as.numeric(traitValue)-traitMean)^2,
+         traitVar=case_when(traitVariationType %in% c('standard deviation',
+                                                      'standard error') ~ as.numeric(traitVariation),
+                            T~.1),
+         traitVT=traitDif+traitVar) %>%
+  summarize(n=n(),
+            traitVarT=(1/n)*sum(traitVT, na.rm=T), .groups = 'drop')
+```
+```{r variance plot, echo=F, fig.width=6, fig.height=3.5, fig.align='center'}
+trait_var_nr%>%
+  left_join(rcs, by='species') %>%
+  replace_na(list(traitVar=0.0001)) %>% #pull(AOO_WS_sqkm) %>% summary()
+  ggplot()+
+  geom_smooth(aes(x=AOO_WS_sqkm, y=traitVarT), color='black',
+              method='glm', formula=y~x, method.args=list(family="quasipoisson"))+
+  geom_point(aes(x=AOO_WS_sqkm, y=traitVarT, color=n))+
+  scale_y_continuous('Estimated Variance')+
+  scale_x_continuous(expression('Area of Occupancy, km '^2),
+                     breaks=c(5000,250000,500000),
+                     labels = function(x){comma(x)},
+                     limits = c(5000,500000),
+                     expand=c(0,0))+
+  scale_color_viridis_c('n\ntrait\nvalues')+
+  facet_wrap(~traitName, scale='free_y')+
+  theme_classic()
+```
+
+# Are physiological traits correlated with area of occupancy?
+
+Below are plots that explore if any of our physiological traits are correlated to area of occupancy. These traits represent summarized species traits and include inputated traits using *rphylopars*. I need to double check that 250 gram frog (upside down smiley face emoji).
+
+```{r imp trait geo, fig.height=3.75, echo=F}
+traits<-read.csv('input_data/inputed_physio_traits.csv')
+traits %>% 
+  select(species, Mass, Tmerge, Tpref, CTmax, CTmin)%>%
+  pivot_longer(cols = -species) %>%
+  left_join(rcs, by='species') %>% 
+  ggplot()+geom_point(aes(x=AOO_WS_sqkm, y=value))+
+  geom_smooth(aes(x=AOO_WS_sqkm, y=value), color='black',
+              method='glm', formula=y~x)+
+   scale_x_continuous(expression('Area of Occupancy, km '^2),
+                     breaks=c(1000,250000,500000),
+                     labels = function(x){comma(x)},
+                     limits = c(1000,500000),
+                     expand=c(0.01,0.01))+
+  facet_wrap(~name, scales='free_y')+
+  theme_classic()+ theme(axis.text=element_text(size=8))
+
+```
+
+# Locations of georeferenced traits
+
+Where are the CTmax locations for each species? Are they within the SE? Generally only about half of the traits we found are within the southeastern united states. We could either run the models at the location outside of the SE US, choose a different trait as the locational source of our model, or maybe the midpoint of the animals distribution within the SE US.
+```{r, echo=F}
+trait_loc<-read.csv('input_data/locations.csv')
+crs.albers <- st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs")
+states<-st_as_sf(map('state', fill=T, plot=F))
+sf::sf_use_s2(FALSE)
+se<-states %>% filter(ID %in% c('mississippi', 'georgia',
+             'florida','south carolina', 'north carolina', 'virginia',
+             'alabama', 'tennessee')) %>%
+  st_make_valid() %>%
+  st_union() %>% st_transform(st_crs(crs.albers))
+usa<-st_as_sf(map('usa', fill=T, plot=F))
+trait_phy_f %>%
+  filter(traitName=='CTmax') %>%
+  group_by(species, verbatimLocality) %>%
+  summarize(mean_val=mean(as.numeric(traitValue), na.rm=T), .groups='keep') %>%
+  left_join(trait_loc, by='verbatimLocality') %>%
+  filter(!is.na(long)) %>%
+  st_as_sf(coords=c('long','lat'), crs=st_crs(usa)) %>%
+  ggplot()+geom_sf(data=usa, fill=NA)+
+  geom_sf(data=se %>% st_transform(st_crs(usa)))+
+  geom_sf(aes(color=species), size=2, alpha=.5)+
+  scale_color_manual(values=met.brewer("Signac", n=15))+
+  theme_classic()
+
+```
+
+```{r locations, echo=F, results='asis'}
+kable(trait_phy_f %>%
+  group_by(species) %>%
+  filter(traitName=='CTmax') %>%
+  summarize(CTmax.loc=paste(unique(verbatimLocality), collapse=', ')),
+caption='Locations of CTmax estimates for species with 3 or more of the essential traits.',
+col.names=c('species','locations'))
+```
+
+# What does the environment look like across the latitudinal gradient
+
+Below is the 10 minute resolution raster for the maximum temperature within the warmest quarter for the SE US (from 1970 to 2000, WorldClim). It is followed by the maximum temperature plotted by the latitude. When calculating warming tolerance we would be comparing this temperature (after transforming it due to microclimatic processes like shading) to the anuran's body temperature (estimated using its physiological traits as inputs).
+
+````{r, message=F, warning=F}
+mt_wq <-read_stars('C:/Users/Owner/Downloads/wc2.1_10m_bio/wc2.1_10m_bio_5.tif') 
+mt_wq <- mt_wq %>% st_crop(se %>% st_transform(st_crs(mt_wq)))
+```
+```{r climate maps, fig.width=5.45, fig.height=3.64, echo=F}
+ggplot()+geom_stars(data=mt_wq)+scale_fill_viridis_c('Max Temp.',option='E')+theme_void()
+```
+.
+
+```{r, fig.width=5, fig.height=2.75, echo=F, message=F, warning=F}
+mt_wq %>% st_coordinates() %>% 
+  cbind(max_temp=as.vector(mt_wq[[1]])) %>%
+  mutate(Longitude=cut(x, seq(-92,-72,4))) %>%
+  ggplot()+geom_point(aes(x=y, y=max_temp, color=Longitude), alpha=0.1)+
+  geom_smooth(aes(x=y, y=max_temp), color='black')+
+  theme_classic()+
+  labs(y='Max. Temp. in warmest quarter, degC', x='Latitude')
+```
+
+
+```{r}
+### need to investigate availability of acclimation information
+```
+
+# What microclimate model should we use? How close does it seem to nature? 
+
+So we want to choose a model that is best representative Below is microclimate data from two microclimate models for `r print(trait_loc[5,1])` in 2020. The biggest deviation among the models occurs near Dec 25; micro_usa captures the heavy rain and converts it to snowfall (cm) while micro_ncep does not record any snowfall (0 cm). The minimum temperature recorded was ~ -7C (19F) using historical weather data.
+
+```{r, echo=F, message=F, warning=F, fig.height=3.75, fig.width=6.5}
+tl1_ncep<-micro_ncep(loc = c(trait_loc[5,3], trait_loc[5,2]),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    dem.res=1000, # requested resolution DEM from elevatr in m
+                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50,  100,  200), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    soilgrids=1,
+                    spatial='../ncep_data',
+                    Usrhyt = 0.01)
+tl1_usa<-micro_usa(loc = c(trait_loc[5,3], trait_loc[5,2]),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50,  100,  200), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    Usrhyt = 0.01)
+library(lubridate)
+as.data.frame(tl1_ncep$metout) %>%
+  mutate(date=tl1_ncep$dates,
+         type='hourly,2.5deg') %>%
+  bind_rows(as.data.frame(tl1_usa$metout) %>%
+  mutate(date=tl1_usa$dates,
+         type='daily,5km')) %>%
+  mutate(month=month(date)) %>% filter(month %in% c(3,6,9,12)) %>%
+ggplot() +
+  geom_line(aes(x=date, y=TALOC, color=type), alpha=0.7, size=1.1) +
+  facet_wrap(~month, scales='free')+
+  scale_color_manual('Microclimate model', values=c('navy','purple'))+
+  scale_y_continuous('Temperature C')+
+  theme_classic()+
+  theme(legend.position='top')+
+  ggtitle('Estimated temperature @ 1 cm')
+as.data.frame(tl1_ncep$soil) %>%
+  mutate(date=tl1_ncep$dates,
+         type='hourly,2.5deg') %>%
+  bind_rows(as.data.frame(tl1_usa$soil) %>%
+  mutate(date=tl1_usa$dates,
+         type='daily,5km')) %>%
+  mutate(month=month(date)) %>% filter(month %in% c(3,6,9,12)) %>%
+ggplot() +
+  geom_line(aes(x=date, y=D5cm, color=type), alpha=0.7, size=1.1) +
+  facet_wrap(~month, scales='free')+
+  scale_color_manual('Microclimate model', values=c('navy','purple'))+
+    scale_y_continuous('Temperature C')+
+  theme_classic()+
+  theme(legend.position='top')+
+  ggtitle('Estimated temperature @ -5 cm')
+```
+
+
+```{r, echo=F, fig.height=5, fig.width=5}
+plot_grid(as.data.frame(tl1_usa$soil) %>% 
+  left_join(as.data.frame(tl1_usa$metout), by=c('DOY','TIME')) %>%
+  mutate(date=tl1_usa$dates) %>%
+  filter(DOY>357, DOY < 365)  %>%
+  dplyr::select(date,TALOC,TAREF,D2.5cm, PCTWET, SNOWDEP) %>%
+  mutate(PCTWET=PCTWET/10) %>%
+  pivot_longer(-date) %>%
+  mutate(name=recode(name, TALOC='Air temp C', TAREF='1cm temp C',
+                     D2.5cm='-2.5cm temp C', PCTWET='% soil sat./10',
+                     SNODEP='Snow depth cm')) %>%
+  ggplot()+geom_line(aes(x=date, y=value, color=name))+
+    theme_classic()+
+    ggtitle('gridMET microclimate data'),
+as.data.frame(tl1_ncep$soil) %>% 
+  left_join(as.data.frame(tl1_ncep$metout), by=c('DOY','TIME')) %>%
+  mutate(date=tl1_usa$dates) %>%
+  filter(DOY>357, DOY < 365)  %>%
+  dplyr::select(date,TALOC,TAREF,D2.5cm,PCTWET,SNOWDEP) %>%
+  mutate(PCTWET=PCTWET/10) %>%
+  pivot_longer(-date) %>%
+  mutate(name=recode(name, TALOC='Air temp C', TAREF='1cm temp C',
+                     D2.5cm='-2.5cm temp C', PCTWET='% soil sat./10',
+                     SNODEP='Snow depth cm')) %>%
+  ggplot()+geom_line(aes(x=date, y=value, color=name))+
+  theme_classic()+
+  ggtitle('NCEP hourly microclimate data'), ncol=1)
+```
