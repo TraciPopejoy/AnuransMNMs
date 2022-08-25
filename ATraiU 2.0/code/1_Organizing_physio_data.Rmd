@@ -106,7 +106,7 @@ name_backbone(name='Boana riojana', rank='species', kingdom = 'animals') %>%
   select(canonicalName, scientificName, family, genus, species, usageKey)
 taxa_key <- read.csv('../ATraiU2_taxonomic_key_2022JULY.csv')
 taxa_key_start[!(taxa_key_start$dataScientificName %in% taxa_key$dataScientificName),]
-taxa_key[taxa_key$dataScientificNam!=taxa_key$canonicalName,]
+#taxa_key[taxa_key$dataScientificNam!=taxa_key$canonicalName,]
 ```
 
 # Build Reference List ----
@@ -200,7 +200,7 @@ trait_db_raw %>%
   left_join(refs, by=c(`Source file name`="traitSource")) %>% 
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
           lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location) %>%
-  #filter(is.na(first_author)) %>% View()
+   #filter(is.na(first_author)) %>% View()
   write_csv('../intermediate_results/denormalized_trait_db.csv')
 ```
 
@@ -383,6 +383,6 @@ trait_long %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', '), .groups='drop'),
             by=c('species','traitName','traitValue')) %>%
-  select(-checked) %>%
+  select(-checked, -dataCollationType) %>%
   write_csv('../ATraiU2_full_2022AUG1.csv')
 ```

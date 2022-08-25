@@ -13,7 +13,7 @@ library(maps);library(sf)
 The purpose of this code is to describe the physiological trait database for the manuscript results. We start by bringing in the necessary trait table and references. We also identify our entire focal species list.
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022JULY3.csv', show_col_types = F) %>%
+trait_long<-read_csv('../ATraiU2_full_2022AUG1.csv', show_col_types = F) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
   filter(traitName != 'Tforage_optim')
 refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
@@ -24,7 +24,57 @@ Our focal taxa are `r foc_taxa`.
 
 We found trait values for the following traits: `r trait_long %>% pull(traitName) %>% unique()` .
 
-Next we describe the results of this literature search. Our database contains `r nrow(trait_long)` reported trait values from `r trait_long %>% pull(refID) %>% unique() %>% length()` unique sources. Of those sources, `r refs %>% filter(refID %in% unique(trait_long$refID), grepl('al Review', journal)) %>% nrow()` are from the Herpetological Review. 
+Next we describe the results of this literature search. Our database contains `r nrow(trait_long)` reported trait values from `r trait_long %>% pull(refID) %>% unique() %>% length()` unique sources. Of those sources, `r refs %>% filter(refID %in% unique(trait_long$refID), grepl('al Review', journal)) %>% nrow()` are from the Herpetological Review. Below I explore the characteristics of the sources used to build this database.
+
+```{r source info, echo=F, results='asis'}
+kable(refs %>% distinct(refID, .keep_all=T) %>%
+  select(ends_with('author')) %>%
+  pivot_longer(everything()) %>% filter(!is.na(value)) %>%
+  count(value) %>% # arrange(desc(n))
+  summarize(n_total=nrow(.),
+            n_mul4=sum(n>3),
+            n_med=median(n),
+            n_high=max(n),
+            n_high_who=paste(ifelse(n==n_high,value,''), collapse='')),
+  caption='Author information from sources in the database')
+kable(refs %>% distinct(refID, .keep_all=T) %>%
+  count(journal) %>% arrange(desc(n)) %>% filter(n>10), 
+  caption='Journals with more than 10 sources found within this database')
+```
+
+We then explore the timing and monotonic trends in publication dates within our sources. We remove the `r refs %>% filter(year < 1944) %>% nrow()` earliest years because it is so sparse: `r refs %>% filter(year < 1944) %>% pull(year)`
+
+```{r, fig.height=2.5, fig.width=4}
+library(Kendall)
+n_t_year<-trait_long %>% filter(lifeStage %in% c('adult','unknown')) %>% 
+  distinct(species, traitName, refID) %>%
+  left_join(refs, by='refID') %>%
+  count(year) %>%
+  right_join(data.frame(year=min(refs$year):2022), by='year') %>%
+  replace_na(list(n=0)) %>%
+  arrange(year) %>% filter(year > 1944)
+mk_year<-MannKendall(n_t_year$n)
+mk_year
+n_t_year %>% filter(max(n)==n)
+n_t_year %>% ggplot(aes(x=year, y=n))+geom_point()+
+  geom_smooth(method='loess',formula='y~x')+theme_classic()
+```
+
+# Quantifying database composition through trait coverage and trait completeness
+
+We split traits into two types: physiological and behavioral. Below is the split of unique trait values for each. Unique trait values refer to observations that have a unique source, trait type (e.g., Mass), species, and life stage.
+
+```{r, echo=F}
+kable(trait_long %>%
+  filter(species %in% foc_taxa) %>%
+  mutate(type=ifelse(traitName %in% c("Mass","CTmax","CTmin","Tpref"),
+                     'phys','behavior')) %>%
+  group_by(type) %>%
+  summarize(n=n(),
+         n_species=n_distinct(species)) %>%
+  ungroup() %>% mutate(per=n/sum(n)),
+  caption='Total unique trait values for physiological and behavioral traits')
+```
 
 ```{r}
 kable(trait_long %>% 
@@ -34,45 +84,30 @@ kable(trait_long %>%
   filter(n==max(n)) %>%
   mutate(per.top=round(n/total_n*100, 1)) %>%
   arrange(traitEvidenceCategory),
-  caption='Number of traits and top evidence category for each trait, across all taxa.')
+  caption='Number of unique traits and top evidence category for each trait, across all taxa.')
 ```
 ```{r}
-trait_long %>%
-  filter(species %in% foc_taxa) %>%
-  mutate(type=ifelse(traitName %in% c("Mass","CTmax","CTmin","Tpref"),
-                     'phys','behavior')) %>%
-  group_by(type) %>%
-  summarize(n=n(),
-         n_species=n_distinct(species)) %>%
-  ungroup() %>% mutate(per=n/sum(n))
+trait_long %>% filter(is.na(traitEvidenceCategory), 
+                      traitName =='Tpref')
+trait_long %>% filter(traitSource == 'Noland1981_CTmax')
 ```
-
-Using this species specific approach (WoS & google), we found `r trait_long %>% filter(dataCollationType=='concentrated') %>% pull(refID) %>% unique() %>% length()` unique references that contained `r trait_long %>% filter(dataCollationType=='concentrated') %>% nrow()` reported trait values for our focal species. In entirety, we found `r trait_long %>% filter(species %in% foc_taxa) %>% nrow()` reported trait values for our focal species.
-
-```{r sum stats, echo=F}
-kable(trait_long %>%
-        filter(species %in% foc_taxa) %>% count(traitName) %>% arrange(desc(n)),
-      caption='Count of the Trait Values Found by the Type of the Trait, Restricted to the Focal Species.')
-```
-
-Trait coverage
+## Trait Coverage
 
 ```{r}
-trait_long %>% 
+(traitcov<-trait_long %>% 
   filter(species %in% foc_taxa, 
          lifeStage %in% c('adult','unknown')) %>%
   distinct(species, traitName) %>%
   group_by(traitName) %>%
-  count() %>% arrange(desc(n))
-trait_long %>% filter(lifeStage%in% c('adult','unknown')) %>%
-  filter(species %in% c('Pseudacris fouquettei','Pseudacris brachyphona')) %>%
-  select(species, traitName, lifeStage, traitSource)
+  count() %>% arrange(desc(n)))
+
 trait_long %>% 
   filter(species %in% foc_taxa, 
          lifeStage %in% c('adult','unknown'),
-         traitName %in% c('Tbask','Tforage_optim')) 
+         traitName %in% c('Tbask')) 
 ```
 
+# Trait completeness
 
 We then built a table that contains the trait completeness (as number of traits) for the adult stage and all life stages. 
 
@@ -98,11 +133,25 @@ trait_total<-trait_long %>%
 
 ```
 
+Below we explore the traits for these species with the fewest trait values. 
+
+```{r}
+trait_long %>% filter(lifeStage%in% c('adult','unknown')) %>%
+  filter(species %in% trait_total[trait_total$n==min(trait_total$n),'species']) %>%
+  select(species, traitName, lifeStage, traitSource)
+```
+
+
 ```{r, echo=F}
 kable(trait_total, caption='Trait completeness per focal species. n is trait completeness (out of 9 possible) for adults and n_LS is trait completeness across the 5 life stages (egg, tadpole, metamorph, juvenile, adult).')
 ```
 
-Thus in total, for the adult trait values, we found a median of `r trait_total %>% summarize(median(n)) %>% as.numeric()` (IQR = `r trait_total %>% summarize(IQR(n)) %>% as.numeric()`) reported trait values per species across life stage. W found a median of `r ls_trait_total %>% summarize(median(n_LS)) %>% as.numeric()` (IQR = `r ls_trait_total %>% summarize(IQR(n_LS)) %>% as.numeric()`) reported trait values per species across life stage. The following species in our focal taxa had the most and minimum trait completeness for the adult (or unknown) lifestage. 
+Matrix completion describes the completeness of the matrix (so at least one trait value for each species and each trait; or 9 x 40 = 360 values). By summing the n column of the table above, we get `r sum(trait_total$n)` trait values and `r round(100*sum(trait_total$n)/360, 2)`% matrix completion. 
+
+For trait coverage, we have a median of `r median(traitcov$n)` species for each trait (IQR = `r IQR(traitcov$n)` species). This is a median trait coverage of `r round(100*median(traitcov$n)/40), 1)`%. 
+
+
+Thus in total, for the adult trait values, we found a median of `r trait_total %>% summarize(median(n)) %>% as.numeric()` (IQR = `r trait_total %>% summarize(IQR(n)) %>% as.numeric()`) reported trait values per species for the adult life stage. That translates to `r round(100*median(trait_total$n)/9)`% trait completeness. We found a median of `r ls_trait_total %>% summarize(median(n_LS)) %>% as.numeric()` (IQR = `r ls_trait_total %>% summarize(IQR(n_LS)) %>% as.numeric()`) reported trait values per species across life stage. The following species in our focal taxa had the most and minimum trait completeness for the adult (or unknown) lifestage. 
 
 ```{r, echo=F}
 kable(trait_total %>% filter(n==max(n)|n==min(n)))
@@ -114,11 +163,21 @@ We then investigated the distribution of reported trait values across life stage
 kable(trait_long %>%
   mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
                                   lifeStage=='unknown' ~ 'adult',
+                               lifeStage=='egg' ~ 'eggs',
                                   T ~ lifeStage)) %>%
-  # only 1 trait per species per lifeStage
-  distinct(species, traitName, lifeStage,  .keep_all=T) %>%
   group_by(lifeStage) %>%
   summarize(n=n(), n_spp=n_distinct(species)) %>% arrange(desc(n)))
+```
+
+```{r}
+trait_total %>% filter(max(n_LS)==n_LS) %>% pull(species)
+trait_long %>%
+  filter(species == (trait_total %>% filter(max(n_LS)==n_LS) %>% pull(species))) %>%
+  mutate(lifeStage=case_when(lifeStage == 'unknown' ~ 'adult',
+                             grepl('stage', lifeStage) ~'tadpole',
+                             T ~ lifeStage)) %>%
+  group_by(lifeStage) %>% summarize(n_distinct(traitName))
+
 ```
 
 I use the RCS data for the area of occupancy and for conservation status. *Lithobates sevosus* was not included in the species pool for the RCS analysis. So I will use the IUCN range map to identify which HUC12 are occupied and calculate its area of occupancy (using the same data inputs as DuBose et al. 2022. I also looked up its conservation status (07/01/2022).
@@ -273,7 +332,6 @@ se_inset<-ggplot()+
 
 trait_ref_ndf<-trait_long %>%
   filter(species %in% foc_taxa,
-         traitName != 'Tforage_optim',
          lifeStage %in% c('adult','unknown')) %>%
   group_by(species, family, traitName, refID) %>%
   slice(1) %>%
@@ -284,6 +342,7 @@ trait_ref_ndf<-trait_long %>%
                         paste0(species,'*'),species),
             .groups='drop')  %>%
   distinct(.keep_all = T)
+trait_ref_ndf %>% group_by(species) %>% summarize(tn=sum(n)) %>% pull(tn) %>% max()
 tax_ref_ord<-trait_ref_ndf %>%
   group_by(Taxa) %>% summarize(tn=sum(n)) %>%
   arrange(desc(tn)) %>%
@@ -296,11 +355,11 @@ trait_hist<-trait_ref_ndf %>%
                                 'Tmerge','Activity'))) %>%
   ggplot()+
   geom_col(aes(y=TaxF, x=n, fill=TraitF), position='stack')+
-  draw_plot(se_inset, x=19.5, y=17, scale=22)+
+  draw_plot(se_inset, x=24, y=17.5, scale=25)+
   labs(y='',x='Reference count')+
   scale_fill_manual('Trait Name', values=met.brewer('Hiroshige')[-5])+
   scale_x_continuous(breaks=seq(0,35,5), 
-                     expand=c(0.01,0.01), limits = c(0,35))+
+                     expand=c(0.01,0.01), limits = c(0,36))+
   theme_classic()+
   theme(legend.position=c(.735,.20), 
         legend.text=element_text(size=9),
@@ -346,7 +405,7 @@ trait_count_rarity %>%
 kruskal.test(n~family, data=trait_count_rarity)
 ```
 
-First I am going to get the phylopic information down through the API.
+I downloaded phylopics that represent each family. Below are people I need to acknowledge for these pictures. 
 
 ```{r}
 # getting phylopic information
