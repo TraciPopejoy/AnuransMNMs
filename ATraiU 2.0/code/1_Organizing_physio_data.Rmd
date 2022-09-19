@@ -104,7 +104,7 @@ I then checked taxa for spelling mistakes on 01/20/2022 and 05/12/2022. I also e
 ```{r}
 name_backbone(name='Boana riojana', rank='species', kingdom = 'animals') %>%
   select(canonicalName, scientificName, family, genus, species, usageKey)
-taxa_key <- read.csv('../ATraiU2_taxonomic_key_2022JULY.csv')
+taxa_key <- read.csv('../intermediate_results/ATraiU2_taxonomic_key_2022JULY.csv')
 taxa_key_start[!(taxa_key_start$dataScientificName %in% taxa_key$dataScientificName),]
 #taxa_key[taxa_key$dataScientificNam!=taxa_key$canonicalName,]
 ```
@@ -181,8 +181,9 @@ This also gives me a chance to geolocate species whose identity might have chang
 ```{r, echo=F}
 kable(trait_db_raw %>%
   filter(genus == 'Pseudacris',
-         !grepl('Hyla ', dataScientificName)) %>%
-    distinct(dataScientificName, Location,`Source file name`)) 
+         !grepl('Hyla ', dataScientificName),
+         !grepl('crucifer', dataScientificName)) %>%
+    distinct(dataScientificName, Location,`Source file name`, Notes)) 
 kable(trait_db_raw %>%
   filter(genus == 'Acris', `Source file name` !="AmphibiaWeb") %>%
   distinct(dataScientificName, Location,`Source file name`))
@@ -200,7 +201,7 @@ trait_db_raw %>%
   left_join(refs, by=c(`Source file name`="traitSource")) %>% 
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
           lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location) %>%
-   #filter(is.na(first_author)) %>% View()
+   #filter(is.na(first_author)) %>% pull(`Source file name`)
   write_csv('../intermediate_results/denormalized_trait_db.csv')
 ```
 
@@ -214,8 +215,8 @@ trait_long<-trait_db_raw %>%
   left_join(refs, by='traitSource') %>% 
   # remove columns that are superfluous for larger tables
   select(-dataScientificName, 
-         -`Search Terms Used`, -DOI, -Notes, -page,-order,-Season,
-         -doi, -citation, -journal,-issue, -year,
+         -`Search Terms Used`, -DOI, -page, -Season,
+         -doi, -citation, -journal, -issue, -year,
          -ends_with('author'), -`Original Source`) %>%
   # rename columns to match ecological trait standards when possible
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
@@ -266,7 +267,7 @@ tchar<-trait_long %>%
 kable(tchar %>% slice_sample(n=3))
 ```
 ```{r}
-# nuumeric traits
+# numeric traits
 tbif<-trait_long %>%
   mutate(lifeStage = case_when(grepl('stage', lifeStage) ~ 'tadpole',
                                   lifeStage=='unknown' ~ 'adult',
@@ -281,12 +282,12 @@ tbif<-trait_long %>%
   pivot_wider(names_from=traitName, values_from = v_n, values_fn=mean) %>%
   group_by(species, lifeStage) %>%
   summarize(refIDs_n=paste(unique(refID), collapse=', '),
-            Mass=ifelse(!all(is.na(Mass)), mean(Mass,na.rm=T), NA),
+            Mass=ifelse(!all(is.na(Mass)), round(mean(Mass,na.rm=T),2), NA),
             CTmax=ifelse(!all(is.na(CTmax)), max(CTmax, na.rm=T), NA),
             CTmin=ifelse(!all(is.na(CTmin)), min(CTmin, na.rm=T), NA), 
-            Tpref=ifelse(!all(is.na(Tpref)), mean(Tpref, na.rm=T),  NA),
-            Tbask=ifelse(!all(is.na(Tbask)), mean(Tbask, na.rm=T),  NA),
-            Tforage_optim=ifelse(!all(is.na(Tforage_optim)), mean(Tforage_optim, na.rm=T), NA),
+            Tpref=ifelse(!all(is.na(Tpref)), round(mean(Tpref, na.rm=T),2),  NA),
+            Tbask=ifelse(!all(is.na(Tbask)), round(mean(Tbask, na.rm=T),2),  NA),
+            Tforage_optim=ifelse(!all(is.na(Tforage_optim)), round(mean(Tforage_optim, na.rm=T),2), NA),
             Tforage_max=ifelse(!all(is.na(Tforage_max)), max(Tforage_max, na.rm=T), NA),  
             Tforage_min=ifelse(!all(is.na(Tforage_min)), min(Tforage_min, na.rm=T), NA), 
             Tmerge=ifelse(!all(is.na(Tmerge)), min(Tmerge, na.rm=T), NA),
@@ -301,7 +302,7 @@ full_join(tchar, tbif, by=c('species','lifeStage')) %>%
   mutate(refIDs=paste(refIDs_n, refIDs_a, sep=', ')) %>%
   select(-refIDs_a, -refIDs_n, -lifeStage) %>%
   select(species, everything()) %>%
-  write.csv('../ATraiU2_summary_values_2022AUG.csv', row.names = F)
+  write.csv('../ATraiU2_summary_values_2022SEPT.csv', row.names = F)
 ```
 ```{r, echo=F}
 kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
@@ -316,7 +317,7 @@ kable(full_join(tchar, tbif, by=c('species','lifeStage')) %>%
 
 ```{r}
 trait_long %>% 
-  group_by(dataCollationType, checked) %>%
+  group_by(checked) %>%
   summarize(n=n(), .groups='drop') %>% mutate(per_n=round((n/sum(n)*100),1))
 ```
 
@@ -383,6 +384,14 @@ trait_long %>%
               group_by(species, traitName, traitValue) %>%
               summarize(outlier=paste(outlier, collapse=', '), .groups='drop'),
             by=c('species','traitName','traitValue')) %>%
-  select(-checked, -dataCollationType) %>%
-  write_csv('../ATraiU2_full_2022AUG1.csv')
+  select(-checked, -dataCollationType) %>% 
+  # fixing traits that have missing unit values
+  mutate(traitUnit = case_when(is.na(traitUnit) & 
+                                       traitName %in% c('Tpref','Tmerge','CTmax') & 
+                                       traitValue != 'overwinters' ~ 'C', 
+                         is.na(traitUnit) & traitName == 'Mass' ~ 'g', 
+                         T ~ traitUnit)) %>%
+  #filter(traitName == 'CTmax', species == 'Gastrophryne carolinensis')
+  #filter(is.na(traitUnit), traitName != 'Activity') 
+  write_csv('../ATraiU2_full_2022SEPT.csv')
 ```

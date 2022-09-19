@@ -13,7 +13,7 @@ library(maps);library(sf)
 The purpose of this code is to describe the physiological trait database for the manuscript results. We start by bringing in the necessary trait table and references. We also identify our entire focal species list.
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022AUG1.csv', show_col_types = F) %>%
+trait_long<-read_csv('../ATraiU2_full_2022SEPT1.csv', show_col_types = F) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
   filter(traitName != 'Tforage_optim')
 refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
@@ -37,14 +37,15 @@ kable(refs %>% distinct(refID, .keep_all=T) %>%
             n_high=max(n),
             n_high_who=paste(ifelse(n==n_high,value,''), collapse='')),
   caption='Author information from sources in the database')
-kable(refs %>% distinct(refID, .keep_all=T) %>%
+kable(refs %>% filter(refID %in% trait_long$refID)%>%
+        distinct(refID, .keep_all=T) %>%
   count(journal) %>% arrange(desc(n)) %>% filter(n>10), 
   caption='Journals with more than 10 sources found within this database')
 ```
 
 We then explore the timing and monotonic trends in publication dates within our sources. We remove the `r refs %>% filter(year < 1944) %>% nrow()` earliest years because it is so sparse: `r refs %>% filter(year < 1944) %>% pull(year)`
 
-```{r, fig.height=2.5, fig.width=4}
+```{r}
 library(Kendall)
 n_t_year<-trait_long %>% filter(lifeStage %in% c('adult','unknown')) %>% 
   distinct(species, traitName, refID) %>%
@@ -53,11 +54,13 @@ n_t_year<-trait_long %>% filter(lifeStage %in% c('adult','unknown')) %>%
   right_join(data.frame(year=min(refs$year):2022), by='year') %>%
   replace_na(list(n=0)) %>%
   arrange(year) %>% filter(year > 1944)
-mk_year<-MannKendall(n_t_year$n)
-mk_year
-n_t_year %>% filter(max(n)==n)
-n_t_year %>% ggplot(aes(x=year, y=n))+geom_point()+
-  geom_smooth(method='loess',formula='y~x')+theme_classic()
+(mk_year<-MannKendall(n_t_year$n))
+```
+```{r time graph, echo=F, fig.height=2.5, fig.width=4}
+n_t_year %>% ggplot()+geom_point(aes(x=year, y=n))+
+  geom_text(data=. %>% filter(max(n)==n),
+            aes(label=year, x=year+3, y=n))+
+  geom_smooth(aes(x=year, y=n),method='loess',formula='y~x')+theme_classic()
 ```
 
 # Quantifying database composition through trait coverage and trait completeness
@@ -76,7 +79,7 @@ kable(trait_long %>%
   caption='Total unique trait values for physiological and behavioral traits')
 ```
 
-```{r}
+```{r, echo=F, results='asis'}
 kable(trait_long %>% 
   group_by(traitName, traitEvidenceCategory) %>% 
   count() %>% 
@@ -86,30 +89,26 @@ kable(trait_long %>%
   arrange(traitEvidenceCategory),
   caption='Number of unique traits and top evidence category for each trait, across all taxa.')
 ```
-```{r}
-trait_long %>% filter(is.na(traitEvidenceCategory), 
-                      traitName =='Tpref')
-trait_long %>% filter(traitSource == 'Noland1981_CTmax')
-```
+
 ## Trait Coverage
 
 ```{r}
-(traitcov<-trait_long %>% 
+kable(traitcov<-trait_long %>% 
   filter(species %in% foc_taxa, 
          lifeStage %in% c('adult','unknown')) %>%
   distinct(species, traitName) %>%
   group_by(traitName) %>%
-  count() %>% arrange(desc(n)))
-
-trait_long %>% 
-  filter(species %in% foc_taxa, 
-         lifeStage %in% c('adult','unknown'),
-         traitName %in% c('Tbask')) 
+  count() %>% arrange(desc(n)),
+  caption='Trait coverage or number of species with atleaset one value for that traitName')
 ```
+
+For trait coverage, we have a median of `r median(traitcov$n)` species for each trait (IQR = `r IQR(traitcov$n)` species). This is a median trait coverage of `r round(100*median(traitcov$n)/40, 1)` %. 
+
+The following species have Tpref values: `r trait_long %>% filter(species %in% foc_taxa,          lifeStage %in% c('adult','unknown'), traitName %in% c('Tbask')) %>% pull(species) %>% unique()` .
 
 # Trait completeness
 
-We then built a table that contains the trait completeness (as number of traits) for the adult stage and all life stages. 
+We then built a table that contains the trait completeness (as number of traits) for the adult stage and all life stages. Life stages are binned into 5 groups: eggs, tadpoles, metamorphs, juveniles, and adults.
 
 ```{r}
 ls_trait_total<-trait_long %>%
@@ -128,10 +127,9 @@ trait_total<-trait_long %>%
   tally() %>% ungroup() %>%
   arrange(desc(n)) %>%
   left_join(ls_trait_total, by='species')
-# identifying those without any trait data
-(mis_taxa<-foc_taxa[which(!(foc_taxa %in% trait_total$species), useNames = T)])
-
 ```
+
+The following species have 0 trait values within our database: `r (mis_taxa<-foc_taxa[which(!(foc_taxa %in% trait_total$species), useNames = T)])`.
 
 Below we explore the traits for these species with the fewest trait values. 
 
@@ -147,9 +145,6 @@ kable(trait_total, caption='Trait completeness per focal species. n is trait com
 ```
 
 Matrix completion describes the completeness of the matrix (so at least one trait value for each species and each trait; or 9 x 40 = 360 values). By summing the n column of the table above, we get `r sum(trait_total$n)` trait values and `r round(100*sum(trait_total$n)/360, 2)`% matrix completion. 
-
-For trait coverage, we have a median of `r median(traitcov$n)` species for each trait (IQR = `r IQR(traitcov$n)` species). This is a median trait coverage of `r round(100*median(traitcov$n)/40), 1)`%. 
-
 
 Thus in total, for the adult trait values, we found a median of `r trait_total %>% summarize(median(n)) %>% as.numeric()` (IQR = `r trait_total %>% summarize(IQR(n)) %>% as.numeric()`) reported trait values per species for the adult life stage. That translates to `r round(100*median(trait_total$n)/9)`% trait completeness. We found a median of `r ls_trait_total %>% summarize(median(n_LS)) %>% as.numeric()` (IQR = `r ls_trait_total %>% summarize(IQR(n_LS)) %>% as.numeric()`) reported trait values per species across life stage. The following species in our focal taxa had the most and minimum trait completeness for the adult (or unknown) lifestage. 
 
@@ -234,7 +229,7 @@ binom.test(4,9)
 binom.test(2,9)
 ```
 
-```{r, fig.height=2, fig.width=4}
+```{r, echo=F, fig.height=2, fig.width=4}
 library(ggrepel)
 trait_total %>%
   ggplot()+
@@ -318,7 +313,7 @@ ggsave('../manuscript/summary_grid_figure.jpg',
        width = 3.5, height = 5)
 ```
 
-```{r, fig.width=3.5, fig.height=6}
+```{r, echo=F, fig.width=3.5, fig.height=6}
 states<-st_as_sf(map('state', fill=T, plot=F))
 usa<-st_as_sf(map('usa', fill=T, plot=F))
 SE_states<-c('mississippi', 'georgia',
@@ -355,11 +350,11 @@ trait_hist<-trait_ref_ndf %>%
                                 'Tmerge','Activity'))) %>%
   ggplot()+
   geom_col(aes(y=TaxF, x=n, fill=TraitF), position='stack')+
-  draw_plot(se_inset, x=24, y=17.5, scale=25)+
+  draw_plot(se_inset, x=27, y=17.5, scale=28)+
   labs(y='',x='Reference count')+
   scale_fill_manual('Trait Name', values=met.brewer('Hiroshige')[-5])+
-  scale_x_continuous(breaks=seq(0,35,5), 
-                     expand=c(0.01,0.01), limits = c(0,36))+
+  scale_x_continuous(breaks=seq(0,40,5), 
+                     expand=c(0.01,0.01), limits = c(0,40))+
   theme_classic()+
   theme(legend.position=c(.735,.20), 
         legend.text=element_text(size=9),
@@ -393,15 +388,19 @@ nrow(trait_count_rarity)
 ```
 ### Comparing Trait Completeness among Families
 
-```{r}
-set.seed(12345)
-trait_count_rarity %>%
+```{r family table, echo=F}
+kable(trait_count_rarity %>%
   group_by(family) %>%
   summarize(n_sp=n(),
             med_trait_n=median(n),
             iqr_traits=IQR(n),
-            range_traits=paste(min(n), max(n), sep=' to '))
+            range_traits=paste(min(n), max(n), sep=' to ')) %>%
+    arrange(med_trait_n),
+  caption='Family level information about trait completeness')
+```
 
+```{r}
+set.seed(12345)
 kruskal.test(n~family, data=trait_count_rarity)
 ```
 
@@ -463,15 +462,20 @@ ggplot(aes(x=n, y=famF, fill=family))+
   theme(legend.position='none')
 fam_plot
 ```
+
 ### Comparison of Trait completeness among genera
 
-```{r}
-trait_count_rarity %>%
+```{r genera table, echo=F}
+kable(trait_count_rarity %>%
   group_by(genus) %>%
   summarize(n_sp=n(),
             med_trait_n=median(n),
             iqr_traits=IQR(n),
-            range_traits=paste(min(n), max(n), sep=' to '))
+            range_traits=paste(min(n), max(n), sep=' to ')) %>%
+    arrange(med_trait_n), 
+  caption='Differences among genera in trait completeness')
+```
+```{r}
 kruskal.test(n~genus, data=trait_count_rarity)
 library(dunn.test)
 dunn.test(trait_count_rarity$n,
@@ -515,6 +519,7 @@ plot_grid(plot_grid(gen_plot+theme(legend.position='none', axis.title = element_
 ggsave('../manuscript/F2_tax_comp_wtax.jpg', 
        width = 6.5, height = 2.5)
 ```
+
 ## Compare Rarity with Trait Completeness
 
 ```{r}
@@ -565,7 +570,7 @@ kable(head(trait_ls_total %>% select(species, n, total_ls, n_ls)))
 
 The potential combinations of life stages are: `r unique(trait_ls_total$total_ls)`. 
 
-Based on the trait data, I think total possible trait completenes for all life stages would be `r 9+2+4+3+5`.
+Based on the trait data, I think total possible trait completeness for all life stages would be `r 9+2+4+3+5`.
 ```{r, echo=F, results='asis'}
 kable(trait_long %>% 
         filter(species %in% foc_taxa) %>%
@@ -627,19 +632,30 @@ kable(trait_ls_total %>%
   caption='minimum AOO of species with > 3 life stages with trait values reported or < 3 life stages with trait values reported')
 ```
 
-# Outside focal taxa
-
-Outside of our focal taxa, we had `r trait_long %>% filter(!(species %in% foc_taxa)) %>% nrow()` reported trait values for `trait_long %>% filter(!(species %in% foc_taxa)) %>% pull(species) %>% unique() %>% length()-1` species. 
+# Stats used in the Discussion
 
 ```{r}
-kable(trait_long %>%
-  filter(!(species %in% foc_taxa)) %>%
-  group_by(species) %>%
-  summarize(`trait completeness`=n_distinct(traitName),
-            `n trait values`=n_distinct(traitValue)) %>% 
-  arrange(desc(`trait completeness`)) %>%
-  slice(1:4))
+n_b4<-trait_long %>% left_join(refs, by='refID') %>%
+  distinct(species, traitName, refID, .keep_all=T) %>%
+  filter(year < 2008) %>% nrow()
+n_all<-trait_long %>% left_join(refs, by='refID') %>%
+  distinct(species, traitName, refID, .keep_all=T) %>%
+  nrow()
 ```
 
-     
-  
+The percent of all traits before 2008 (the year after Lemmon et al. 2007 clarified Pseudacris phylogeny) is `r round(n_b4/n_all*100, 1)`%.
+
+```{r most numerous trait, echo=F}
+mx_sp<-trait_long %>%
+  filter(traitName !='Mass',
+         traitName !='Activity',
+         lifeStage %in% c('adult','unknown')) %>%
+  distinct(species, traitName, verbatimLocality) %>%
+  count(traitName, species) %>%
+  filter(n > 3) %>% arrange(desc(n)) %>% filter(max(n)==n) %>% pull(species)
+kable(trait_long %>% filter(traitName=='CTmax', 
+                            species == mx_sp, 
+                            lifeStage %in% c('adult','unknown')) %>% 
+        select(species, traitName, traitValue, verbatimLocality),
+      caption='Species with the highest number of values for a single trait type (CTmax)')
+```
