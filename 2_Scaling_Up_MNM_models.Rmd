@@ -9,17 +9,19 @@ output: pdf_document
 library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
 ```
 
-First I identify study extent
+First I identify study extent. I want to get a fine resolution that matches the microclimate data. So I use 
 
 ```{r}
-va<-st_as_sf(map('state',c('virginia','north carolina','south carolina','georgia',
-                           'florida'), fill=T, plot=F)) %>%
+se<-st_as_sf(map('state',c('virginia', 'north carolina', 'south carolina',
+                           'georgia', 'florida'), fill=T, plot=F)) %>%
+  st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
 # create raster of study extent
-va_r<-st_rasterize(va, dx=70, dy=70) %>% #turn into a raster
+se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster
   st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
                        rowid_to_column() # add an id column
 ```
+
 
 Next, I'm going to identify the points I want to run the models for. 
 ```{r}
@@ -34,8 +36,7 @@ for(s in test_spp){
 va_pts<-anuran_pts %>% st_as_sf(coords=c('Longitude','Latitude'), 
                                 crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
   st_join(va_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-    filter(!is.na(rowid)) %>% # remove points outside of our sample grid
-    group_by(rowid, species)
+    filter(!is.na(rowid))  # remove points outside of our sample grid
 pts_to_run<-NULL
 for(i in sample(1:nrow(va_r),20)){
   pt_rw<-va_pts %>% filter(rowid==i)
@@ -230,18 +231,43 @@ ggsave('results/tsm_lat_gradient2.jpg', width = 4, height=3)
 
 ```
 
+# Do estimated microclimates differ within the climate data resolution?
 
-```{r grid test, echo=F, eval=F}
-# seeing if within grid matters that much 
-bind_rows(
-pt1_micro<-micro_usa(loc=c(-77.2233, 37.1507))
-pt2_micro<-micro_usa(loc=c(-77.2081, 37.1342))
-library(lubridate)
-bind_rows(pt1_micro$metout %>% as_tibble() %>% mutate(name='point 1') %>%
-            rowid_to_column(),
-          pt2_micro$metout %>% as_tibble() %>% mutate(name='point 2') %>%
-            rowid_to_column()) %>%
-  filter(DOY==1, rowid > 8000) %>% 
+Below I run two microclimate models using a DEM resolution of 1km and a climate layer resolution of 2.5 degrees at 6hr increments. Will they differ because of the DEM resolution? Answer is yes!
+
+```{r}
+se_pts<-se_r %>% 
+  st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84") %>% 
+  st_centroid() %>% st_coordinates()
+m1<-micro_ncep(loc = c(as.numeric(se_pts[1,1]),
+                       as.numeric(se_pts[1,2])),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    dem.res=1000, # requested resolution of the DEM from elevatr in m
+                    DEP = c(0, 2.5,  5,  10,  15,
+                            20,  30,  50,  100,  200), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    write_input=0, save=0,
+                    soilgrids=1,
+                    spatial='../ncep_data',
+                    Usrhyt = 0.01)
+m2<-micro_ncep(loc = c(as.numeric(se_pts[2,1]),
+                       as.numeric(se_pts[2,2])),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    dem.res=1000, # requested resolution of the DEM from elevatr in m
+                    DEP = c(0, 2.5,  5,  10,  15,
+                            20,  30,  50,  100,  200), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    write_input=0, save=0,
+                    soilgrids=1,
+                    spatial='../ncep_data',
+                    Usrhyt = 0.01)
+identical(m1, m2)
+```
+
+```{r temp plots within climate grid, echo=F}
+bind_rows(m1$metout %>% as_tibble() %>% mutate(name='point 1') %>%rowid_to_column(),
+          m2$metout %>% as_tibble() %>% mutate(name='point 2') %>%rowid_to_column()) %>%
+  filter(DOY==1) %>%
   ggplot()+
   geom_line(aes(x=TIME, y=TAREF, color=name), alpha=0.5)+
   scale_color_viridis_d('Points')+
@@ -249,11 +275,23 @@ bind_rows(pt1_micro$metout %>% as_tibble() %>% mutate(name='point 1') %>%
   scale_x_continuous('Time (minutes)')+
   theme_classic()+
   theme(legend.position = c(.9, .9))+
-  ggtitle('January 1st, 2016; VA grid 539')+
   guides(colour = guide_legend(override.aes = list(alpha = 1)))
-st_sfc(st_point(c(-77.2233, 37.1507)),
-          st_point(c(-77.2081, 37.1342)),
+
+library(cowplot)
+plot_grid(st_sfc(st_point(c(as.numeric(se_pts[1,1]), as.numeric(se_pts[1,2]))),
+          st_point(c(as.numeric(se_pts[2,1]), as.numeric(se_pts[2,2]))),
        crs=4326) %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs")) %>%
-  st_distance()
+  ggplot()+geom_sf(data=se_r[1:5,])+geom_sf()+theme_classic(),
+  ggplot()+geom_sf(data=se[5,])+geom_sf(data=se_r[1:5,], fill='red',color='red')+theme_classic(),
+  nrow=1)
 ```
+
+# Decisions that remain:
+
+1) which climate model to use
+2) temporal resolution to use [ year that matches observation or single year across all observations]
+3) spatial resolution to use 
+
+today (8/31) I'm going to attend arc office hours to see if I can NicheMapR onto the super computer and then maybe get advice for parallelizing the model creation step.
+

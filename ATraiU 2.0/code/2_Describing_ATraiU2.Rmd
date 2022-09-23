@@ -16,7 +16,7 @@ The purpose of this code is to describe the physiological trait database for the
 trait_long<-read_csv('../ATraiU2_full_2022SEPT1.csv', show_col_types = F) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
   filter(traitName != 'Tforage_optim')
-refs <- read_csv('../ATraiU2_reference_list_2022JULY.csv', show_col_types = F) 
+refs <- read_csv('../ATraiU2_reference_list_2022SEPT.csv', show_col_types = F) 
 foc_taxa<-read.csv('../../focal_taxa.csv') %>% pull(species)
 ```
 
