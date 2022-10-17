@@ -12,12 +12,13 @@ library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
 First I identify study extent. I want to get a fine resolution that matches the microclimate data. So I use 
 
 ```{r}
-se<-st_as_sf(map('state',c('virginia', 'north carolina', 'south carolina',
-                           'georgia', 'florida'), fill=T, plot=F)) %>%
+se<-st_as_sf(map('state',c('mississippi', 'georgia',
+             'florida','south carolina', 'north carolina', 'virginia',
+             'alabama', 'tennessee'), fill=T, plot=F)) %>%
   st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
 # create raster of study extent
-se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster
+se_r<-st_rasterize(se, dx=30, dy=30) %>% #turn into a raster
   st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
                        rowid_to_column() # add an id column
 ```
@@ -25,7 +26,7 @@ se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster
 
 Next, I'm going to identify the points I want to run the models for. 
 ```{r}
-test_spp<-c('Dryophytes chrysoscelis','Pseudacris crucifer','Lithobates catesbeianus')
+test_spp<-c('Dryophytes chrysoscelis','Pseudacris crucifer','Lithobates catesbeianus', 'Anaxyrus fowleri', 'Gastrophryne carolinensis')
 anuran_pts<-NULL
 for(s in test_spp){
   anuran_pts<-bind_rows(anuran_pts,
@@ -33,31 +34,33 @@ for(s in test_spp){
                                  dplyr::select(source, species, Longitude, Latitude,
                                                coordinatePrecision, elevation, year))
 }
-va_pts<-anuran_pts %>% st_as_sf(coords=c('Longitude','Latitude'), 
+se_pts<-anuran_pts %>% st_as_sf(coords=c('Longitude','Latitude'), 
                                 crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-  st_join(va_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
     filter(!is.na(rowid))  # remove points outside of our sample grid
 pts_to_run<-NULL
-for(i in sample(1:nrow(va_r),20)){
-  pt_rw<-va_pts %>% filter(rowid==i)
+for(i in sample(unique(se_pts$rowid),50)){
+  pt_rw<-se_pts %>% filter(rowid==i)
   ptd<-pt_rw %>% st_distance() %>% rowSums()
   pts_to_run<-bind_rows(pts_to_run,
-                        bind_cols(pt_rw[which(ptd==min(ptd)),],
+                        bind_cols(pt_rw[which(ptd==min(ptd)),] %>% filter(max(year)==year),
                                   t_dist=min(ptd),
-                                  spp_all=paste(unique(pt_rw$species), collapse=', ')))
+                                  spp_all=paste(unique(pt_rw$species), collapse=', '),
+                                  year_all=paste(unique(pt_rw$year), collapse=', ')))
 }
-pts_to_run %>% ggplot()+geom_sf(data=va_r %>% st_transform(st_crs(va_pts))) + 
+pts_to_run %>% ggplot()+geom_sf(data=se_r %>% st_transform(st_crs(se_pts)), alpha=0.3) + 
   geom_sf(aes(color=species))+theme_classic()
 write_sf(pts_to_run, 'microclimate_data/points_ran.shp', quiet=T)
-va_pts_df <- pts_to_run %>% st_coordinates() %>% 
-  bind_cols(rowid = pts_to_run$rowid, spp_all=pts_to_run$spp_all)
+se_pts_df1 <- pts_to_run %>% distinct(geometry, .keep_all=T) 
+se_pts_df <- se_pts_df1 %>% st_coordinates() %>%
+  bind_cols(rowid = se_pts_df1$rowid, spp_all=se_pts_df1$spp_all)
 ```
 
 Next I bring in the traits we will use to create the models.
 
 ```{r}
-traits<-read.csv('input_data/inputed_physio_traits.csv') %>% 
-  left_join(read.csv('ATraiU 2.0/ATraiU2_summary_values_2022JULY.csv') %>% 
+traits<-read.csv('input_data/inputed_physio_traits.csv') %>%  #NEED TO ADD CODE HERE FOR TRAIT IMPUTAION
+    left_join(read.csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv') %>% 
               dplyr::select(species, nocturnal, diurnal, crepuscular) %>%
               mutate(across(-species, ~ifelse(.x > 0,1,0)))) %>%
   mutate(across(c(s.fossorial,s.arboreal), ~as.numeric(.x)))
@@ -144,7 +147,81 @@ for(i in 1:length(files)){
 
 We then need to run microclimate and ectotherm models for many points across the landscape. Ideally this will be at the resolution of the environmental datasets. The NicheMapR team has explored how ordinary kringing can be used to interpolate microclimate data to a physiological parameter (article link here)[https://onlinelibrary-wiley-com.ezproxy.lib.vt.edu/doi/10.1111/jbi.13152]. In 2020, there was a discussion of using rasters to speed processing for large geographic extents (thread here)[https://groups.google.com/g/nichemapr/c/FNzXsigRdmk/m/7z_4-rBaBgAJ]
 
-```{r ectotherm for loop, eval=T}
+So I will want to run a lot of ectotherm models to translate microclimate data and species specific traits into estimated body temperature. To make this more legible, I create the function below to wrap around ectotherm and output the data we are interested in.
+
+```{r}
+Te_est<-function(spp, save=F){
+  spp_traits <- traits %>% filter(species == spp)
+    ecto<-ectotherm(Ww_g=spp_traits["Mass"], 
+                    CT_max=spp_traits["CTmax"], 
+                    CT_min=spp_traits["CTmin"], 
+                    T_pref=spp_traits["Tpref"],
+                    diurn=spp_traits["diurnal"],
+                    nocturn=spp_traits["nocturnal"],
+                    crepus=spp_traits["crepuscular"],
+                    burrow=spp_traits["s.fossorial"],
+                    climb=spp_traits["s.arboreal"],
+                    shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                    maxdepth = 10, #maximum depth of the burrow
+                    T_F_min=max(c(19, as.numeric(spp_traits["Tmerge"]))),
+                    T_F_max=min(c(35, as.numeric(spp_traits["CTmax"]))),
+                    T_RB_min=spp_traits["Tmerge"],
+                    T_B_min=spp_traits["Tmerge"])
+    if(save==T){saveRDS(ecto,
+                paste0('microclimate_data/pt',rw,'/!',spp,'.rds'))}
+    body_temps<-ecto$environ[,1:5]
+    output<-body_temps %>% as_tibble() %>%
+      mutate(hot_tsm=as.numeric(spp_traits["CTmax"])-TC) %>% 
+      group_by(DOY) %>% 
+      mutate(dayrange=max(TC)-min(TC)) %>%
+      ungroup() %>%
+      summarize(n_total=n(),
+                n_above=sum(hot_tsm < 0),
+                max_TC=max(TC),
+                tsm=min(hot_tsm),
+                max_dayrange=max(dayrange),
+                avg_dayrange=mean(dayrange),
+                X=micro$longlat[1],
+                Y=micro$longlat[2],
+                species=spp)
+return(output)
+}
+Te_est("Pseudacris crucifer")
+```
+
+So then we can start with the simplest comparison: at one location where a physiological trait was determined. 
+
+# One Point Interspecific Comparison
+
+# Intraspecific Comparisons
+
+```{r}
+ecto_out<-NULL
+for(rw in 41:nrow(se_pts_df)){
+  #dir.create(paste0('microclimate_data/pt',rw))
+  micro<-micro_ncep(loc = c(as.numeric(se_pts_df[rw,1]),as.numeric(se_pts_df[rw,2])),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    dem.res=1000, # requested resolution of the DEM from elevatr in m
+                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50,  100,  200), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    write_input=0, #save=1,
+                    soilgrids=1, #CHECK WHY THIS ISN'T WORKING
+                    spatial='../ncep_data',
+                    Usrhyt = 0.01) # local height for organism
+  #file.copy(list.files(pattern='.Rda'), 
+  #          paste0('microclimate_data/pt', rw, '/',list.files(pattern='.Rda')))
+  
+  for(spp in test_spp){
+    if(grepl(spp, se_pts_df[rw,4])){
+      ecto_out<-bind_rows(ecto_out,
+                          Te_est(spp) %>% mutate(rowid=rw))
+    print(paste('done with ',spp,' point', rw, 'of', nrow(se_pts_df)))
+    }
+  }
+}
+```
+
+```{r ectotherm function for loop, eval=T}
 # ectotherm for loop shown here.
 ```
 
@@ -177,40 +254,53 @@ for(k in test_spp){
 }
 }
 ecto_out
+length(unique(ecto_out$rowid))
 ```
 
 ```{r}
 ecto_out %>%
+  group_by(species) %>%
+  summarize(min(tsm),
+            max(max_TC),
+            sum(n_above),
+            mean(n_above)) %>%
+  arrange(`min(tsm)`)
+
+```
+
+
+```{r}
+ecto_out %>% distinct(X, Y, species, .keep_all=T) %>%
   st_as_sf(coords=c('X','Y'),
            crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-  ggplot()+geom_sf(data=va_r, fill=NA)+
-  geom_sf(aes(fill=tsm), pch=21, size=3)+
+  ggplot()+geom_sf(data=se_r, fill=NA)+
+  geom_sf(aes(fill=tsm), pch=21, size=2.5)+
   facet_wrap(~species)+theme_classic()+
   scale_fill_gradient2('Warming\nTolerance')
-ggsave('results/thermal safety margin space.jpg', width=6, height=3)
+ggsave('results/thermal safety margin space.jpg', width=6.5, height=3)
 
 library(cowplot)
 plot_grid(ecto_out %>%
-  group_by(rowid) %>%
+  group_by(rowid, X, Y) %>%
   summarize(n_spp=n_distinct(species),
             wt_mean=mean(tsm),
             wt_sd=sd(tsm)) %>%
-  mutate(new_rowid=va_pts_df$rowid[1:10]) %>%
-  right_join(va_r, by=c('new_rowid'='rowid')) %>% 
+      st_as_sf(coords=c('X','Y'),
+           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
   ggplot()+
-  geom_sf(aes(fill=n_spp, geometry=geometry))+
-  scale_fill_viridis_c('n\nspecies')+
+  geom_sf(aes(color=n_spp, geometry=geometry))+
+  scale_color_viridis_c('n\nspecies')+
     theme_void(),
   ecto_out %>%
-  group_by(rowid) %>%
+ group_by(rowid, X, Y) %>%
   summarize(n_spp=n_distinct(species),
             wt_mean=mean(tsm),
             wt_sd=sd(tsm)) %>%
-  mutate(new_rowid=va_pts_df$rowid[1:10]) %>%
-  right_join(va_r, by=c('new_rowid'='rowid')) %>% 
+      st_as_sf(coords=c('X','Y'),
+           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>% 
   ggplot()+
-  geom_sf(aes(fill=wt_mean, geometry=geometry))+
-  scale_fill_gradient2('Warming\nTolerance')+
+  geom_sf(aes(color=wt_mean, geometry=geometry))+
+  scale_color_gradient2('Warming\nTolerance')+
     theme_void())
 
 ggsave('results/assemblage tolerance space.jpg', width=6, height=3)
@@ -221,13 +311,13 @@ ecto_out %>% group_by(species) %>%
   mutate(ptdist=max(`Y`)-`Y`) %>%
   ggplot()+
   geom_hline(yintercept=0)+
-  geom_smooth(aes(x=ptdist, y=tsm, color=species, fill=species), method='lm', level=.8)+
-  geom_point(aes(x=ptdist, y=tsm, color=species), size=2, alpha=.5)+
-  labs(y='Warming Tolerance (deg C)',x='Distance from species maximum Latitude (deg))')+
+  geom_smooth(aes(x=Y, y=tsm, color=species, fill=species), method='lm', level=.8)+
+  geom_point(aes(x=Y, y=tsm, color=species), size=2, alpha=.5)+
+  labs(y='Warming Tolerance (deg C)',x='Latitude (deg))')+
   theme_classic()+
   theme(axis.title = element_text(size=8),
         axis.text=element_text(size=8))
-ggsave('results/tsm_lat_gradient2.jpg', width = 4, height=3)
+ggsave('results/tsm_lat_gradient2_real.jpg', width = 5, height=3)
 
 ```
 
