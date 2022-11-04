@@ -1,82 +1,53 @@
 ---
-title: "missing_traits"
-author: "TP DuBose"
-date: "1/19/2022"
+title: "Building Input Dataframes for MNMs"
+date: "10/20/2022"
 output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-library(tidyverse); library(knitr)
-library(Rphylopars); library(ggtree); library(treeplyr)
+library(tidyverse); library(knitr); library(ggrepel); library(cowplot)
+library(Rphylopars); library(ggtree); library(treeplyr); library(phytools)
+library(sf); library(maps);library(stars)
+library(nlme)
 knitr::opts_chunk$set(echo = FALSE)
+focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
 ```
 
-## Trait Imputation Methods
+# Trait Imputation Methods
 
-[Penone et al. 2014](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12232) reviewed imputation methods and [Johnson et al. 2021](https://onlinelibrary.wiley.com/doi/full/10.1111/geb.13185) addressed how bias affects the top methods. 
-
-Generally, using phylogentic information reduces error but bias in trait completeness leads to different methods being *best*.
+[Penone et al. 2014](https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.12232) reviewed imputation methods and [Johnson et al. 2021](https://onlinelibrary.wiley.com/doi/full/10.1111/geb.13185) addressed how bias affects the top methods. Generally, using phylogentic information reduces error but bias in trait completeness leads to different methods being *best*.
 
 #### Bias in our trait dataset
 
-```{r atraiu2, echo=F, warning=F, message=F, fig.width=4.5,fig.height=4}
-trait_db_raw<-read_csv('ATraiU 2.0/ATraiU2_full_2022JULY3.csv') %>%
-  filter(lifeStage %in% c('adult','unknown'),
-         traitName != 'Tforage_optim') 
-foc_taxa<-read.csv('focal_taxa.csv') %>% pull(species)
-tax_ord<-trait_db_raw %>% 
-  distinct(species, traitName, .keep_all=T) %>%
-  group_by(species) %>%
-  tally() %>% ungroup() %>%
-  arrange(desc(n)) %>% pull(species)
-trait_ord<-trait_db_raw %>% 
-  filter(species %in% tax_ord) %>%
-  distinct(species, traitName) %>%
-  count(traitName) %>% 
-  arrange(desc(n)) %>% pull(traitName) 
-trait_db_raw %>%
-  distinct(species, traitName) %>%
-  mutate(presence=1,
-         TraitF=factor(traitName, levels=trait_ord)) %>% 
-  pivot_wider(names_from=species, values_from=presence,
-              values_fill=0) %>%
-  ungroup() %>% 
-  select(-traitName) %>%
-  pivot_longer(-TraitF) %>%
-  mutate(taxaF=factor(name, 
-                      levels=tax_ord)) %>% 
-  ggplot()+
-  geom_tile(aes(x=TraitF, y=taxaF, fill=as.factor(value))) +
-  scale_fill_manual(values=c(NA,'black'), name='Trait Available',
-                    labels=c('no', 'yes'))+
-  scale_y_discrete(name="Taxa")+
-  theme_bw()+
-  theme(axis.text.x= element_text(angle=40, hjust=.9),
-        legend.position = 'top',
-        axis.title = element_blank(), 
-        axis.text.y=element_text(face='italic'))
-trait_complete<-trait_db_raw %>%
-  filter(species %in% tax_ord,
-         traitName %in% c('Tpref','Tmerge','CTmax','CTmin')) %>%
-  distinct(species, traitName) %>% 
-  group_by(species) %>% count() %>%
-  mutate(comp=n/4)
-nrow(trait_complete)
+In 0_Species_Selection.Rmd, we identified species that have trait data for atleast 3 of the following traits: CTmax, CTmin, Tpref, and Tmerge. 
+
+```{r atraiu2, echo=F, warning=F, message=F}
+trait_db<-read_csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv', show_col_types = F)
+knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/ATraiU 2.0/manuscript/summary_figure_combo.jpg")
 ```
 
-This would give us `r nrow(trait_complete)` species total: `r trait_complete %>% filter(comp >= 0.5) %>% nrow()` species with >= 50% trait completeness and `r trait_complete %>% filter(comp < 0.5) %>% nrow()` species below that mark.
+```{r}
+kable(trait_db %>% 
+        dplyr::select(-refIDs, -arrhythmic, -crepuscular, -nocturnal, -diurnal) %>%
+        pivot_longer(-species) %>%
+        group_by(species) %>% 
+        filter(species %in% focal_spp, name !='Tforage_optim')%>% 
+        summarize(ntraits=sum(is.na(value)), rel.n.traits=round(ntraits/7,3)*100),
+caption='Missing Trait Data among focal species',
+col.names = c('Species', 'N missing Traits', 'Missing Data %'))
+```
 
-# Revisiting how different imputation methods work under bias
+Revisiting how different imputation methods work under bias
 ```{r, echo=FALSE, fig.cap="", out.width = '90%', out.height='80%', fig.align='center'}
 knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/input_data/Johnson2021_error_trait_imputatoin.png")
 ```
 
-# Anuran Phylogeny
+## Anuran Phylogeny
 
-Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the `r length(tax_ord)` species we have trait information for.
+Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for.
 
 ```{r phylogeny, echo = F, fig.height=4.5}
-taxa_table<-data.frame(species=foc_taxa) %>%
+taxa_table<-trait_db %>% dplyr::select(species) %>%
   mutate(Tree.name.syn=case_when(species == 'Dryophytes squirellus'~ 'Hyla squirella',
                              species == 'Dryophytes gratiosus'~ 'Hyla gratiosa',
                              species == 'Dryophytes cinereus'~'Hyla cinerea',
@@ -96,98 +67,33 @@ tree_orig <- read.tree(file = "input_data/amph_shl_new_Consensus_7238.tre")
 tree.pruned <- keep.tip(phy = tree_orig, 
                         tip = taxa_table$Tree.name) 
 taxa_table$node<-nodeid(tree.pruned, taxa_table$Tree.name)
-plot(tree.pruned, font=2)
+#plot(tree.pruned, font=2)
 ```
 
-```{r}
-df<-trait_complete %>% right_join(taxa_table, by='species') %>%
+```{r plot the phylo tree, echo=F, warning=F, message=F}
+trait.df<-trait_db %>%
+  mutate(category=ifelse(species %in% focal_spp, 'focal', 'SE')) %>%
+  right_join(taxa_table, by='species') %>%
             mutate(tree.lab=paste0(substr(Tree.name,1,1), '. ',
                                    sub('.*\\_','',Tree.name))) %>%
   replace_na(list(n=0, comp=0))
-trait_tree<-left_join(tree.pruned, df)
-library(MetBrewer)
-
-ggtree(trait_tree, aes(color=comp, label=tree.lab), size=3)+ 
-  geom_tiplab(as_ylab=T)+
-  scale_color_gradientn('Trait\nCompleteness',
-                        colors = met.brewer("VanGogh1"),
-                        labels=scales::percent)
+trait_tree<-left_join(tree.pruned, trait.df, by='node')
+ggtree(trait_tree, aes(color=category, label=tree.lab), size=3)+ 
+  geom_tiplab(as_ylab=T)
 ```
 
-# Investigate Life History Trait variation in focal taxa
+So based on the missing trait data of our focal species, we should either use Rphylopars or BHPMF + phylogeny to impute the missing trait data. I am going to use all the trait data available across the entire Southeast US anuran species group (n = 40 species) to impute the data.
 
-```{r}
-atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv')
-names(atraiu)
-library(vegan)
-atraiu_num1<-atraiu %>% 
-  select(latin_name, max.longevity_max_yrs,
-         max.max_length_mm_fem, max.fecundity_max,
-         min.maturity_min_yrs_fem, 
-         min.hatch_time_min, 
-         min.metamorph_time_min, min.metamorph_size_min) %>%
-  mutate(across(-latin_name, as.numeric),
-         min.metamorph_time_min=min.metamorph_time_min+1) %>%
-  mutate(across(-latin_name, log10)) %>% # View()
-  mutate(genus=gsub("(\\w+).*", "\\1", latin_name)) %>%
-  group_by(genus) %>%
-  mutate_at(vars(-latin_name, -group_cols()), list(~ifelse(is.na(.), mean(., na.rm = TRUE),.))) %>% 
-  ungroup()%>%
-  drop_na()
-atraiu_num <- atraiu_num1 %>% 
-  select(-latin_name, -genus)  %>%
-  as.matrix()
-rownames(atraiu_num)<-atraiu_num1$latin_name
+## Use Rphylopars to imput continuous trait data
 
-atraiu_gower<-vegdist(atraiu_num, method='gower', na.rm=T)
-atrai_pcoa<-prcomp(atraiu_num)
-summary(atrai_pcoa)
-```
-
-```{r trait biplot, echo=F}
-library(ggfortify); library(ggrepel)
-# stats help: https://stats.stackexchange.com/questions/276645/arrows-of-underlying-variables-in-pca-biplot-in-r
-loaded = atrai_pcoa$rotation %*% diag(atrai_pcoa$sdev)
-pc_var<-loaded %>% as_tibble() %>% 
-  bind_cols(variable=rownames(loaded)) %>%
-  mutate(across(-variable, function(x){x * 0.3 * sqrt(nrow(atraiu_num) - 1)}),
-         ar_lab=sub('_min','', sub('_max','',sub('_mm', '', sub('_yrs', '', sub('.*\\.','',variable)))))) %>%
-  rename('PC1'=V1, 'PC2'=V2) %>% select(variable, ar_lab, PC1, PC2)
-#pc_var
-fortify(atrai_pcoa) %>%
-  rownames_to_column('species') %>%
-  left_join(trait_complete) %>%
-  mutate(pt_shp=ifelse(is.na(comp),NA,'potential')) %>%
-  ggplot()+
-  geom_point(aes(x=PC1, y=PC2, color=comp, shape=pt_shp), size=3)+
-  geom_segment(data=pc_var, x=0, y=0, aes(xend=PC1, yend=PC2),
-               arrow=arrow(length = unit(0.01, "npc")))+
-  geom_text_repel(data=pc_var, aes(x=PC1, y=PC2, label=ar_lab), size=3)+
-  geom_text_repel(data=. %>% filter(comp<.4),
-                  aes(x=PC1, y=PC2, label=species), size=3)+
-  scale_shape_manual(na.value=20, values=16)+
-  scale_color_gradientn('Trait\nCompleteness',
-                        colors = met.brewer("VanGogh1"),
-                        labels=scales::percent,
-                       na.value='grey90')+
-  theme_classic()+
-  theme(legend.position=c(.15,.9))
-rm(atraiu_gower,atraiu_num, atraiu_num1, tree_orig, pc_var, atrai_pcoa)
-```
-
-```{r}
-kable(trait_complete %>% filter(comp > .5) %>%
-  arrange(desc(n)), digits=2)
-```
-
-# Use Rphylopars to imput continuous trait data
-```{r pressure, warning=F, message=F, echo=F, , out.height='50%'}
-trait_matrix<-read.csv('ATraiU 2.0/ATraiU2_summary_values_2022JULY.csv') %>%
-  left_join(taxa_table, by='species') %>% 
-  select(Tree.name, trait_ord[2:6]) %>%
-  rename(species=Tree.name) %>%
-  filter(!is.na(species)) # removes Lithobates kauffeldi
-
+```{r trait mat, warning=F, message=F, echo=F}
+trait.mat.m<-trait.df[, c(18, 6:10, 12:14)] %>%
+  rename('species'='Tree.name')
+# note to self : incorporate interspecific traits?
+read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%
+  filter(lifeStage %in% c('unknown','adult')) %>%
+  select(species, verbatimLocality, traitName, traitValue) %>%
+  pivot_wider(names_from=traitName, values_from=traitValue)
 ```
 We use the following code to impute the traits using the *Rphylopars* package. 
 - estimates phylogenetic and phenotypic variance-covariance matrices 
@@ -196,18 +102,35 @@ We use the following code to impute the traits using the *Rphylopars* package.
 Essentially is a maximum likelihood frequentist way to impute traits
 
 ```{r results, echo=T, out.width='60%'}
-p_BM <- phylopars(trait_data = data.frame(trait_matrix), tree = tree.pruned,
+p_BM <- phylopars(trait_data = data.frame(trait.mat), tree = tree.pruned,
                   phylo_correlated=F, model='BM')
-summary(p_BM)
+p_lamda <- phylopars(trait_data = data.frame(trait.mat), tree=tree.pruned,
+                     phylo_correlated=F, model= "lambda")
+p_OU <- phylopars(trait_data = data.frame(trait.mat), 
+                  tree = force.ultrametric(tree.pruned),
+                  phylo_correlated=F, model='OU')
 ```
 
 
+```{r phyomodel out, echo=F}
+kable(data.frame(model=c('lambda','Brownian motion','OU'),
+                 df=c(p_lamda$npars, p_BM$npars, p_OU$npars),
+                 loglik=round(c(p_lamda$logLik, p_BM$logLik, p_OU$logLik),2)) %>%
+        mutate(AIC =round(c(AIC(p_lamda),AIC(p_BM), AIC(p_OU)), 2)) %>%
+        arrange(AIC),
+      caption='Best model for phylogenetic imputation')
+```
+
+```{r}
+summary(p_OU)
+```
+
 ```{r results graph,  fig.height=4, echo=F}
 #results!
-imp_results <- p_BM$anc_recon[1:length(tree.pruned$tip.label),] %>%
+imp_results <- p_OU$anc_recon[1:length(tree.pruned$tip.label),] %>%
   as_tibble() %>%
-  bind_cols(species=rownames(p_BM$anc_recon[1:length(tree.pruned$tip.label),])) %>%
-  left_join(trait_matrix, by='species')%>%
+  bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
+  left_join(trait.mat, by='species')%>%
   pivot_longer(-species) %>%
   mutate(variable=gsub('.y','', gsub('\\.x','', name)),
          impute=ifelse(grepl('y',name), 'No','Yes'))  %>%
@@ -232,67 +155,336 @@ imp_results %>%
         axis.text.x = element_text(angle=20, hjust=.87, vjust=1))
 ```
 
-# So species to consider are:
-
-```{r table of taxa, warning=F, message=F, echo=F}
-n_imputed<-imp_results %>%
-  group_by(family, genus, species) %>%
-  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop')
-kable(n_imputed %>%
-  filter(n_imp < 3) %>%
-  group_by(family, genus) %>% 
-    summarize(N=n(), Species=paste(gsub('_',' ', species), collapse = ', '),
-              .groups='drop'))
+```{r species discussion, echo=F}
+kable(imp_results  %>%
+        left_join(taxa_table, by=c('species'='Tree.name')) %>%
+        rename(Tree.name=species, species=species.y) %>%
+        filter(species %in% focal_spp) %>%
+  group_by(species) %>%
+  count(Imputed) %>% 
+  filter(Imputed == "Imputed") %>%
+  mutate(perimp=round(n/8,3)) %>%
+  ungroup() %>% summarize(summary(n), summary(perimp)) %>%
+    mutate(row.names=c('min','.25','median','mean','.75','max')) %>%
+    select(row.names, everything()),
+  col.names=c('parameter', 'N traits','% traits'),
+  caption='Summary of imputed traits')
 ```
 
-```{r species discussion, fig.width=8, fig.height=2.5}
-n_imputed %>%
-  ggplot()+
-  geom_bar(aes(x=n_imp), fill='goldenrod3', alpha=0.9)+
-  geom_text(data=. %>% group_by(n_imp) %>% 
-              summarize(labb=paste(species, collapse='\n')),
-            aes(x=n_imp, y=2, label=labb), size=3.5)+
-  theme_classic()+
-  labs(y='N species', x='Traits Imputed')
-```
+This gives us `r imp_results  %>% left_join(taxa_table, by=c('species'='Tree.name')) %>% rename(Tree.name=species, species=species.y) %>% filter(species %in% focal_spp) %>% group_by(species) %>% count(Imputed) %>% filter(Imputed == "Imputed") %>% ungroup() %>% summarize(sum(n)) %>% as.numeric()` traits (of a possible `r length(focal_spp)` x 8 = `r length(focal_spp)*8`). 
 
-```{r}
-rcs<-read_csv('C:/Users/Owner/Desktop/Git/National-RCS/Anuran_RCS_and_components.csv',
+```{r rcs focal sp plot, echo=F, fig.height=2.75, fig.width=5}
+rcs<-read_csv('C:/Users/Owner/Desktop/Git/National-RCS/Anuran_RCS_and_components_20220908.csv',
               show_col_types=FALSE) %>% 
   filter(grepl('North', extent)) %>%
-  select(species, genus, family, AOO_WS_sqkm, RCS_WS) %>%
+  dplyr::select(species, genus, family, AOO_WS_sqkm, RCS_WS) %>%
   # manually adding in 'Lithobates sevosus' information
   bind_rows(data.frame(species='Lithobates sevosus', 
                        genus='Lithobates',family='Ranidae',
                        AOO_WS_sqkm=737.8, RCS_WS=1.0001)) %>%
   mutate(rankRCS=91-rank(RCS_WS))
-n_imputed %>% rename(Tree.name=species) %>%
-  left_join(taxa_table, by=c('Tree.name')) %>% left_join(rcs, by='species') %>%
+imp_results %>%
+  left_join(taxa_table, by=c('species'='Tree.name'))%>%
+  dplyr::select(-species) %>% rename(species = species.y) %>%
+  group_by(species) %>%
+  summarize(n_imp=sum(Imputed=='Imputed'), .groups='drop') %>%
+  left_join(rcs, by='species') %>%
   ggplot(aes(x=RCS_WS, y=n_imp))+
   geom_point()+
-  geom_text_repel(data=. %>% filter(n_imp<3), aes(label=species), 
+  geom_text_repel(data=. %>% filter(n_imp<5), aes(label=species), 
                   min.segment.length = .01, size=2.5)+
-  geom_hline(yintercept=2.7)+
   labs(y='Number of Imputed Traits',
        x='RCS index - North American extent, watershed grain size')+
   theme_classic()
 ```
 
-# Outputting the trait tables to query for MNM models
+## Outputting the trait tables to query for MNMs
 
 ```{r}
-imp_results %>%
+atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv', 
+                 show_col_types = F)
+used_traits<-imp_results %>% #imputed thermoregulation traits
   select(species, variable, Yes, Imputed) %>%
   group_by(species) %>%
+  # tally imputed traits to keep track
   mutate(imp.trait=paste(ifelse(Imputed=='Imputed', variable, ''), collapse=''),
          n.imp=sum(Imputed=='Imputed')) %>%
   select(-Imputed) %>%
   pivot_wider(names_from=variable, values_from=Yes) %>%
-  filter(n.imp < 3) %>%
+  # join in taxonomic information
   rename(Tree.name=species) %>% left_join(taxa_table, by='Tree.name') %>%
-  ungroup() %>%
-  select(species, imp.trait, n.imp, Mass, Tmerge, Tpref, CTmax, CTmin) %>%
-  left_join(atraiu %>% select(latin_name, s.fossorial, s.arboreal),
+  # filter to only the focal species
+  filter(species %in% focal_spp) %>% ungroup() %>%
+  select(-node, -Tree.name.syn, -Tree.name) %>%
+  # bring in ATraiU for burrowing & climbing
+  left_join(atraiu %>% select(family, latin_name, s.fossorial, s.arboreal),
             by=c('species'='latin_name')) %>%
-  write.csv('input_data/inputed_physio_traits.csv', row.names=F)
+  # bring in categorical activity data
+  left_join(read.csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv') %>%
+              dplyr::select(species, nocturnal, diurnal, crepuscular) %>%
+              mutate(across(-species, ~ifelse(.x > 0,1,0))), by='species') %>%
+  # reorder so column order is nicer
+  select(family, species,imp.trait, n.imp, s.fossorial, s.arboreal, 
+         nocturnal, diurnal, crepuscular, everything()) %>%
+  # estimating activity traits for Lithobates areolatus
+  mutate(nocturnal=case_when(species=='Lithobates areolatus'~ 1, T~nocturnal),
+         diurnal=case_when(species == 'Lithobates areolatus'~0, T~diurnal),
+         crepuscular = case_when(species == 'Lithobates areolatus' ~ 0, T~crepuscular),
+         s.fossorial = as.numeric(s.fossorial),
+         s.arboreal = as.numeric(s.arboreal)) 
+write.csv(used_traits, 'input_data/inputed_physio_traits.csv', row.names=F)
 ```
+
+```{r, fig.width=5, fig.height=2, echo=F}
+nictp<-theme_classic()+
+  theme(axis.text.x = element_text(angle=25, hjust=.9, size=9))
+plt.df<-used_traits %>% mutate(pltsp=paste0(substr(species, 1,1), '. ', 
+                                            sub(".*? ", "", species)))
+#mass
+ggplot(plt.df, aes(x=family, y=Mass, label=pltsp)) +
+  geom_point() + geom_text_repel(size=3)+
+  scale_y_log10('Wet Mass, g', breaks=c(1, 10, 50, 100, 250))+nictp
+```
+
+
+
+```{r thermal traits, fig.width=7, fig.height=2.5, echo=F}
+# thermal limits & scope
+plt.df %>% select(family, pltsp, CTmax, CTmin) %>%
+  mutate(CTscope=CTmax - CTmin) %>%
+  pivot_longer(-c(family, pltsp)) %>%
+  ggplot(aes(x=family, y=value, label=pltsp)) +
+  geom_point() + geom_text_repel(size=2.5)+
+  facet_wrap(~name, scales='free_y')+nictp
+# tbask & tforage
+plt.df %>% select(family, pltsp, Tbask, Tforage_min, Tforage_max) %>%
+  pivot_longer(-c(family, pltsp)) %>%
+  ggplot(aes(x=family, y=value, label=pltsp)) +
+  geom_point() + geom_text_repel(size=2.5)+
+  facet_wrap(~name, scales='free_y')+nictp
+```
+```{r other temp traits, fig.width=5, fig.height=2.5}  
+# emergence temperature
+plot_grid(ggplot(plt.df, aes(x=family, y=Tmerge, label=pltsp)) +
+  geom_point() + geom_text_repel(size=3)+
+    scale_y_continuous('Emergence Temperature, Celcius')+nictp,
+# tpref
+ggplot(plt.df, aes(x=family, y=Tpref, label=pltsp)) +
+  geom_point() + geom_text_repel(size=3)+
+  scale_y_continuous('Preferred Temperature, Celcius')+nictp)
+```
+
+# Building points at which to run the MNMs
+
+Now that I have the species pool, I identify points to run the models at for two different scales: intraspecific (across the SE US) and interspecific (two different ways based on 1 point where the trait was analyzed and intraspecific variation). The code chunk below creates a grid across the southeastern US that we will use to get the points we will use as inputs into the microclimate model. 
+
+```{r}
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
+                 fill=T, plot=F)) %>%
+  st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+# create raster of study extent
+se_r<-st_rasterize(se, dx=30, dy=30) %>% #turn into a raster of 30x30 kilometers
+  st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
+                       rowid_to_column() # add an id column
+```
+
+Now that we've have that grid, we then populate the grid with known occurrences for our focal species. Within each grid, we then identify the point with the lowest distance to all other points (and maximum year if that point is represented multiple times). We will create a 2020 microclimate for that point, which will be used as input for all species occupying that grid cell. This loses some of the biology associated with the point occurrence (location & year information) but does make sure that the comparisons are based on the ecotherm model, not subtle differences in the microclimate model. 
+
+```{r}
+# first we pull in each species' occurrence points from GBIF & HerpMapper
+anuran_pts<-NULL
+for(s in focal_spp){
+  anuran_pts<-bind_rows(anuran_pts,
+                      read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
+                        # only keep this information about the occurrence point
+                                 dplyr::select(source, species, Longitude, Latitude,
+                                               coordinatePrecision, elevation, year))
+}
+
+# We join it with the grid created above
+se_pts<-anuran_pts %>% 
+  st_as_sf(coords=c('Longitude','Latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+    filter(!is.na(rowid))  # remove points outside of our sample grid
+
+# and then find the point that is closest to all other points 
+# as the single point to run for that grid
+pts_to_run<-NULL
+for(i in unique(se_pts$rowid)){
+  pt_rw<-se_pts %>% filter(rowid==i)
+  ptd<-pt_rw %>% st_distance() %>% rowSums()
+  pts_to_run<-bind_rows(pts_to_run,
+                        # find the minimum summed distance among all points
+                        bind_cols(pt_rw[which(ptd==min(ptd)),] %>% 
+                                    # if multiple points, keep the most recent one
+                                    filter(max(year)==year),
+                                  t_dist=min(ptd), # report how far away it was from other points
+                                  # what other species were in that grid
+                                  spp_all=paste(unique(pt_rw$species), collapse=', '),
+                                  # what other years represented
+                                  year_all=paste(unique(pt_rw$year), collapse=', ')))
+}
+
+se_pts_df1 <- pts_to_run %>% distinct(geometry, .keep_all=T) # 1 row per unique point
+
+# NicheMapR needs a dataframe, so output a csv
+se_pts_df <- se_pts_df1 %>% st_coordinates() %>% 
+  bind_cols(rowid = se_pts_df1$rowid, spp_all=se_pts_df1$spp_all)
+write.csv(se_pts_df, 'input_data/points_to_run_df.csv')
+```
+
+```{r point grid map, echo=F}
+pts_to_run %>% distinct(geometry, .keep_all=T) %>%
+  ggplot()+geom_sf(data=se_r %>% st_transform(st_crs(se_pts)), alpha=0.3) + 
+  geom_sf(aes(color=species))+theme_classic()
+write_sf(pts_to_run, 'input_data/points_ran.shp', quiet=T)
+```
+
+# Exploring accounting for Acclimation using data from ATraiU-TaDS
+
+So one issue is that we know there is intraspecific variation in critical thermal maxima and other thermoregulation trait values. We could try to build curves to control for this acclimation-driven variation in CTmax. Essentially we would derive a function between acclimation temperature and CTmax for each species (if possible). We would then apply that function across a raster of mean temperature during the warmest quarter (WorldClim bioclim variable I think). Then, before running the ectotherm model, we would pull the acclimation-adjusted CTmax for that location. 
+
+First, lets explore the information we have about acclimation ability in SE Anurans. We find that there are only six species that had different acclimation temperatures and CTmax values.
+
+```{r}
+all_traits<-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv')
+#head(all_traits)
+CTmax_acc<-all_traits %>% 
+  filter(traitName=='CTmax', 
+         lifeStage %in% c('adult','unknown'),
+         !is.na(traitAcclimation)) %>%
+  mutate(traitAcclimation=case_when(traitAcclimation == '4C and 14C' ~ 14,
+                                    traitAcclimation == '20 to 24' ~ 22,
+                                    T ~ as.numeric(traitAcclimation)),
+         traitValue = as.numeric(traitValue)) 
+```
+
+```{r spp with acc info, echo=F}
+kable(CTmax_acc %>% 
+  filter(species %in% focal_spp) %>%
+  group_by(species) %>% 
+  mutate(n=n(), range=max(traitAcclimation)-min(traitAcclimation)) %>%
+  filter(n >1, range > 0) %>%
+  summarize(meanCTmax=round(mean(traitValue),2), 
+            sdCTmax=round(sd(traitValue),2), 
+            accRange=mean(range), nPts=mean(n)),
+  caption='Species with more than one acclimation temperature available for adult CTmax trait values',
+  col.names = c('Species', 'Mean CTmax', 'sd CTmax', 'Acclimation temp. range', 'N CTmax values'))
+```
+
+That being said, it does look like there is some variation in acclimation ability. The lines below represent CTmax as a function of log(acclimation temperature) for quick analysis; the black line represents the function using all SE Anuran data. 
+
+```{r acclimation plot, echo=F, fig.width=6, fig.height=2.75}
+CTmax_acc %>% ggplot(aes(x=traitAcclimation, y=traitValue))+
+  geom_smooth(method="lm", formula=y~log(x), se=50, color='black')+
+  geom_smooth(data=. %>% filter(species %in% c('Anaxyrus fowleri',
+                                               'Lithobates catesbeianus',
+                                               'Lithobates clamitans',
+                                               'Lithobates palustris',
+                                               'Lithobates sylvaticus',
+                                               'Scaphiopus holbrookii')),
+              aes(color=species),
+              method="lm", formula=y~log(x), se=0)+
+  geom_text_repel(data=. %>% 
+                    group_by(species) %>% 
+                    filter(species %in% c('Anaxyrus fowleri', 'Lithobates catesbeianus',
+                                          'Lithobates clamitans', 'Lithobates palustris',
+                                          'Lithobates sylvaticus', 'Scaphiopus holbrookii'),
+                                    traitAcclimation == max(traitAcclimation)) %>%
+                    distinct(species, traitAcclimation, .keep_all=T),
+                  aes(label=species), size=2.5,
+                  min.segment.length = 0, nudge_x = 5)+
+  geom_point(aes(color=species))+theme_classic()+
+  scale_y_continuous('Measured Critical Thermal Maxima')+
+  scale_x_continuous('Acclimation Temperature')+
+  theme(legend.position='none')+
+  ggtitle('Potential acclimation curves')
+```
+
+I think I don't have enough data to calculate species' level acclimation curve, even for species with more than two points. I apply the formula describbed in Comte & Olden 2017 to account for variation in CTmax when estimating warming tolerance across species ranges for both freshwater and marine fish. 
+$$ CTmax = b + (a - b)e^x $$
+
+where a is the intercept on the y axis, b is the asymptote (maximum CTmax), and x is c*Acclimation temperature (where c is a pseudo-acclimation rate). 
+
+Below I calculate a single acclimation curve for all SE Anurans, acclimation curves where CTmax intercept, CTmax asymptote, and pseudo-acclimation rate vary among family individually, and an acclimation curve where both CTmax intercept and CTmax asymptote vary among families (Comte & Olden 2017 for fish). I could not get the models to converge when I used species as the random factor, even when restricting to the 6 species with multiple acclimation points (likely because median n = 4 points). 
+
+```{r}
+df<-CTmax_acc %>% dplyr::select(family, traitValue, traitAcclimation) %>%
+  rename(y=traitValue, x=traitAcclimation)
+#length(unique(df$family))
+
+allSE<-nls(y~b+(a-b)*exp(c*x), data=df, start=c(a=10, b=40, c=-0.1))
+asy<-nlme(y~b+(a-b)*exp(c*x), data=df, 
+             random=b~1|family, fixed=a+b+c~1,
+             start=c(a=10, b=40, c=-0.1),
+             control=nlmeControl(pnlsTol=.1, msMaxIter=1e6, tolerance=1e-4))
+int<-nlme(y~b+(a-b)*exp(c*x), data=df, 
+             random=a~1|family, fixed=a+b+c~1,
+             start=c(a=10, b=40, c=-0.1),
+             control=nlmeControl(pnlsTol=10, msMaxIter=1e7, tolerance=1e-4))
+rate<-nlme(y~b+(a-b)*exp(c*x), data=df, 
+             random=c~1|family, fixed=a+b+c~1,
+             start=c(a=10, b=40, c=-0.1),
+             control=nlmeControl(pnlsTol=.1, msMaxIter=1e6, tolerance=1e-4))
+asyint<-nlme(y~b+(a-b)*exp(c*x), data=df, 
+             random=a+b~1|family, fixed=a+b+c~1,
+             start=c(a=10, b=40, c=-0.1),
+             control=nlmeControl(pnlsTol=1, msMaxIter=1e7, tolerance=1e-4))
+```
+
+We find that two related top models. CTmax asymptote definitely varies by family and the model that has CTmax asymptote + CTmax intercept vary among families is second best because of increased df penalization. The below plot uses the family-level asymptote and intercept models for the lines, with the CTmax's calculated by trait imputation marked by triangles and at acclimation temperature 31. Because these functions reduce interspecific variation within families, I am leaning towards not accounting for acclimation with this method for our analysis. 
+
+```{r acc model outputs, echo=F}
+kable(tibble(anova(asy, int, rate, asyint, allSE)) %>%
+  dplyr::select(Model:logLik) %>%
+  mutate(`Model name`=c('asy','int','rate','asyint','allSE')) %>%
+  arrange(desc(logLik)),
+  caption='Models relating acclimation temperature to CTmax')
+summary(asyint)
+```
+
+```{r plot what acclimation looks like, echo=F, fig.width=6, fig.height=4}
+sapply(predict(asyint, 
+        data.frame(x=rep(seq(5,30,1), each=5),
+                   family=rep(unique(df$family), 26)), asList=T), '[') %>%
+  as_tibble() %>% pivot_longer(everything()) %>%
+  mutate(x=rep(seq(5,30,1), each=5)) %>%
+  ggplot()+
+  geom_point(data=CTmax_acc, aes(y=traitValue, x=traitAcclimation, color=family))+
+  geom_line(aes(x=x, y=value, color=name))+
+  geom_text_repel(data=used_traits %>%
+              mutate(pltsp=paste0(substr(species, 1,1), '. ', 
+                                            sub(".*? ", "", species))),
+             aes(x=31, y=CTmax, label=pltsp),hjust=0, size=2,
+             min.segment.length = 0)+
+  geom_point(data=used_traits,
+             aes(x=31, y=CTmax, color=family), alpha=0.8,  pch=2, size=2)+
+  scale_y_continuous('CTmax temperature')+
+  scale_x_continuous('Acclimation temperature', expand=c(0.15,.15))+
+  theme_classic()
+```
+
+```{r}
+all_traits %>%
+  filter(species %in% focal_spp,
+         traitName == 'CTmax',
+         lifeStage %in% c('unknown','adult')) %>%
+  mutate(traitValue = as.numeric(traitValue)) %>%
+  # only keep maximum CT for each population
+  group_by(species, verbatimLocality) %>% 
+  filter(traitValue == max(traitValue)) %>%
+  # calculate min, median and max across populations
+  group_by(species) %>%
+  summarize(minCTmax=min(traitValue),
+            medCTmax=median(traitValue),
+            maxCTmax=max(traitValue)) %>%
+  mutate(CTmax_range=maxCTmax-minCTmax) %>%
+  arrange(desc(CTmax_range)) %>%
+  filter(CTmax_range > 0)
+
+```
+
+
+
