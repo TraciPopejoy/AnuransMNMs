@@ -1,0 +1,265 @@
+---
+title: "Download Occurrence Points"
+author: "TP DuBose"
+date: "11/9/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(rgbif); library(tidyverse)
+library(sf); library(maps); library(stars)
+focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
+```
+
+# Building points at which to run the MNMs
+
+Now that I have the species pool, I identify points to run the models at for two different scales: intraspecific (across the SE US) and interspecific (two different ways based on 1 point where the trait was analyzed and intraspecific variation). The code chunk below creates a grid across the southeastern US that we will use to get the points we will use as inputs into the microclimate model. 
+
+```{r}
+focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
+                 fill=T, plot=F)) %>%
+  st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+# create raster of study extent
+#se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster of 1x1 kilometers
+ # st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
+  #                     rowid_to_column() # add an id column
+```
+
+Now that we've have that grid, we then populate the grid with known occurrences for our focal species. Within each grid, we then identify the point with the lowest distance to all other points (and maximum year if that point is represented multiple times). We will create a 2020 microclimate for that point, which will be used as input for all species occupying that grid cell. This loses some of the biology associated with the point occurrence (location & year information) but does make sure that the comparisons are based on the ecotherm model, not subtle differences in the microclimate model. 
+
+```{r}
+# first we pull in each species' occurrence points from GBIF & HerpMapper
+anuran_pts<-NULL
+for(s in focal_spp){
+  anuran_pts<-bind_rows(anuran_pts,
+                        read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
+                        # only keep this information about the occurrence point
+                          dplyr::select(source, species, Longitude, Latitude,
+                                        coordinateUncertaintyInMeters, coordinatePrecision, elevation, 
+                                        day, month, year))
+}
+```
+
+# Query GBIF  
+
+```{r}
+pt_locs<-read.csv('input_data/point_locations.csv')
+anuran.gbif.taxa<-NULL
+for(u in unique(pt_locs$species)){
+  anuran.gbif.taxa<-bind_rows(anuran.gbif.taxa,
+                              name_backbone(name=u, rank='species', kingdom='animals'))
+}
+anuran.gbif.taxa
+```  
+
+Next, we built a well-known-text to spatially filter occurrences from GBIF.
+
+```{r}
+library(wellknown)
+se_wkt1<-se %>% st_buffer(5) %>% st_union()  %>% st_cast('POLYGON') %>% 
+  st_simplify(dTolerance = 10) %>%
+  st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")
+ggplot()+geom_sf(data=se_wkt1)
+se_wkt<-se_wkt1[1]%>% sf_convert()
+nchar(readRDS('../National-RCS/data/north_america_WKT.rds'))
+nchar(se_wkt)
+```
+
+Then, because of query limits set by the GBIF API, we had to group our species in as few of queries underneath 100k. The for loop below queries the GBIF API twice to get two downloads that are <100k occurrences.
+
+```{r}
+anuran_occ<-NULL #where all occ kept eventually
+gbif_download = occ_download(
+    #step 1 - get occ for a species
+    pred_in("taxonKey",  anuran.gbif.taxa$speciesKey), 
+    pred("hasCoordinate", TRUE), #step 2
+    pred("hasGeospatialIssue", FALSE), #partial step 3
+    pred_not(pred("issue", "IDENTIFIED_DATE_UNLIKELY")), #step 3
+    pred_not(pred("issue", "RECORDED_DATE_MISMATCH")), #step 3
+    pred_notnull("country"), #step 4
+    pred_within(se_wkt[1]), #step 5
+    #pred_gte("eventDate", "1975-01-01"),
+    pred_lte("eventDate", "2020-12-30"), #last pull
+    pred_lt("coordinateUncertaintyInMeters",2000), #removing uncertain pts
+    format = "SIMPLE_CSV",
+    user=user,pwd=pwd,email=email)
+  # stopped here lalalal
+occ_download_wait(gbif_download) 
+occ_download_get(gbif_download[1], path = "input_data")
+unzip(paste0("input_data/", gbif_download[1],".zip"), exdir="input_data")
+```
+
+```{r}
+anuran_occ<-read_tsv(paste0("input_data/0147460-220831081235567.csv"),
+                 col_types="cccccccccccccccccccicnnnnnnnnTnnnccccccccTcccccTcc")
+nrow(anuran_occ)
+# remove occ with NA
+anuran_occ %>% filter(is.na(decimalLatitude)) %>% nrow()
+```
+
+```{r}
+t1<-anuran_pts %>% #filter(source == 'GBIF') %>%
+  distinct(species, Longitude, Latitude, year) %>%
+  st_as_sf(coords=c('Longitude','Latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se %>% st_make_valid() %>% st_transform(st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84"))) %>%
+  filter(!is.na(ID)) 
+t1df<-st_coordinates(t1) %>% as_tibble() %>% rename(Latitude=Y, Longitude=X) %>% 
+  bind_cols(t1 %>% as_tibble())
+t2<-anuran_occ %>% distinct(species, decimalLongitude, decimalLatitude, year) %>% rename(Longitude = decimalLongitude, Latitude = decimalLatitude)
+plot_grid(anti_join(t1df,t2)  %>%
+  ggplot()+geom_density(aes(x=year))+ geom_text(aes(x=2000, y=0.01, label=length(Latitude))),#without a match in y
+anti_join(t2, t1df) %>%
+  ggplot()+geom_density(aes(x=year))+ geom_text(aes(x=2000, y=0.01, label=length(Latitude))))
+```
+
+```{r}
+bind_rows(t1 %>% mutate(src='RCS points'), t2 %>% mutate(src='new GBIF')) %>% 
+  ggplot()+geom_histogram(aes(x=year, fill=species), alpha=.3)+
+    theme_classic()+theme(legend.position = c(.2,.6),
+                          legend.text=element_text(size=6), legend.title=element_text(size=6),
+                          legend.margin = margin(t=-5, r=-5, b=-5, l=-5))+
+    guides(fill=guide_legend(ncol=2, size=.5))+
+  facet_wrap(~src)
+```
+
+```{r, fig.width=6.5, fig.height=6}
+aoos_rcs<-t1 %>% 
+ # filter(year >= 1950) %>%
+  st_transform(st_crs(se)) %>%
+  group_by(species) %>% summarize(medyear=median(year, na.rm=T))  %>%
+  st_buffer(5)
+
+aoos_new<- t2 %>% 
+  #filter(year >=1950) %>%
+  st_as_sf(coords=c('Longitude','Latitude'), 
+                           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se %>% st_make_valid() %>% st_transform(st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84"))) %>%
+  filter(!is.na(ID)) %>%
+  st_transform(st_crs(se)) %>%
+  group_by(species) %>% summarize(medyear=median(year, na.rm=T)) %>%
+  st_buffer(5)
+
+bind_rows(aoos_rcs %>% mutate(src='RCS'), aoos_new %>% mutate(src='new')) %>%
+  ggplot()+geom_sf(data=se, fill=NA) + 
+  geom_sf(aes(fill=src, color=src), alpha=0.5)+
+  facet_wrap(~species)+ theme_bw()+
+  scale_fill_discrete('Point\nSource', labels=c('new\nGBIF','pre1950','RCS'), aesthetics=c('fill','color'))
+ggsave('MNM_data_point_source.jpg', width=6.5, height=6)
+```
+
+# Join GBIF data with HerpMapper data
+
+```{r}
+occs<-anuran_pts %>% filter(source=='HM') %>%
+  bind_rows(anuran_occ %>%
+              select(species, day, month, year, 
+                     decimalLatitude, decimalLongitude, 
+                     coordinateUncertaintyInMeters, coordinatePrecision, elevation) %>%
+              rename(Longitude=decimalLongitude, Latitude=decimalLatitude) %>%
+              mutate(source='newGBIF')) %>%
+  distinct(species, Longitude, Latitude, year, .keep_all = T)
+```
+
+```{r}
+occs %>%  
+  st_as_sf(coords=c('Longitude','Latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se %>% st_make_valid() %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  filter(!is.na(ID)) %>%
+  group_by(species) %>%
+  summarize(n=n(),
+            medyear=median(year, na.rm=T),
+            year25=quantile(year, .25, na.rm=T),
+            year75=quantile(year,.75, na.rm=T)) %>%
+  st_buffer(5) %>%
+  bind_cols(area=st_area(.))
+  
+```
+
+```{r, fig.height=2.7, fig.width=6.5}
+iucn_all<-read_sf('../ANURA') %>% 
+  filter(binomial %in% focal_spp,
+         !grepl('Extinct',legend)) %>%
+  group_by(binomial) %>% summarize() 
+latlist<-NULL
+for(i in iucn_all$binomial){
+  latlist<-bind_rows(latlist,
+            iucn_all %>%
+    filter(binomial == i) %>%
+    st_rasterize(dx=.5, dy=.5) %>%
+   # st_as_sf(as_points = TRUE, merge = FALSE) %>%
+    st_coordinates() %>%
+    as_tibble() %>% mutate(species=i))
+} 
+ggplot()+geom_sf(data=se)
+max.lat<-st_bbox(se %>% st_transform(st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")))[4]
+anura.tax<-read.csv('input_data/inputed_physio_traits.csv')
+library(cowplot)
+latlist %>%
+            filter(y>0) %>%
+            mutate(dist='IUCN') %>%
+            bind_rows(occs %>% 
+                        filter(Latitude <= max.lat, Longitude >= -91.63314) %>% 
+                        mutate(dist='occs') %>%
+                        rename(y=Latitude)) %>%
+  left_join(anura.tax %>% distinct(family, species), by='species') %>%
+  ggplot()+
+  geom_density(aes(x=y, fill=species), alpha=0.3)+
+  geom_vline(xintercept=max.lat)+
+  scale_x_continuous('Latitude')+
+  facet_grid(dist~family, scale='free')+
+  theme_classic()+theme(legend.position = 'bottom', 
+                        strip.background = element_blank())+
+  guides(fill=guide_legend(nrow=3, size=.5))
+
+rm(iucn_all, iucnrast)
+```
+```{r}
+latlist %>%
+  group_by(species) %>% summarize(percent.dist.below.max.lat=round(ecdf(y)(max.lat)*100,2)) %>%
+  arrange(percent.dist.below.max.lat)
+
+```  
+
+```{r}
+
+# We join it with the grid created above
+se_pts<-anuran_pts %>% 
+  st_as_sf(coords=c('Longitude','Latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_join(se_r %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+    filter(!is.na(rowid))  # remove points outside of our sample grid
+
+# and then find the point that is closest to all other points 
+# as the single point to run for that grid
+pts_to_run<-NULL
+for(i in unique(se_pts$rowid)){
+  pt_rw<-se_pts %>% filter(rowid==i)
+  ptd<-pt_rw %>% st_distance() %>% rowSums()
+  pts_to_run<-bind_rows(pts_to_run,
+                        # find the minimum summed distance among all points
+                        bind_cols(pt_rw[which(ptd==min(ptd)),] %>% 
+                                    # if multiple points, keep the most recent one
+                                    filter(max(year)==year),
+                                  t_dist=min(ptd), # report how far away it was from other points
+                                  # what other species were in that grid
+                                  spp_all=paste(unique(pt_rw$species), collapse=', '),
+                                  # what other years represented
+                                  year_all=paste(unique(pt_rw$year), collapse=', ')))
+}
+
+se_pts_df1 <- pts_to_run %>% distinct(geometry, .keep_all=T) # 1 row per unique point
+
+# NicheMapR needs a dataframe, so output a csv
+se_pts_df <- se_pts_df1 %>% st_coordinates() %>% 
+  bind_cols(rowid = se_pts_df1$rowid, spp_all=se_pts_df1$spp_all)
+write.csv(se_pts_df, 'input_data/points_to_run_df.csv')
+```
+
+```{r point grid map, echo=F}
+pts_to_run %>% distinct(geometry, .keep_all=T) %>%
+  ggplot()+geom_sf(data=se_r %>% st_transform(st_crs(se_pts)), alpha=0.3) + 
+  geom_sf(aes(color=species))+theme_classic()
+write_sf(pts_to_run, 'input_data/points_ran.shp', quiet=T)
+```
