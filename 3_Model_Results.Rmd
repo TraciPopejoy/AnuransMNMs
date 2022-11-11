@@ -204,28 +204,42 @@ Like I said above, we use a for loop similar to the one above to run a MNM at ma
 
 ```{r}
 se_pts<-read.csv('input_data/points_to_run_df.csv')
+rcs<-read.csv('../National-RCS/Anuran_RCS_and_components_20220908.csv')
 test.data<-read.csv('intermediate_results/pts_1_testMNM.csv') %>%
   bind_rows(read.csv('intermediate_results/pts_2_testMNM.csv')) %>%
   distinct(species, rowid, .keep_all=T) %>%
   left_join(se_pts %>% rename(Longitude=X, Latitude=Y), by='rowid') %>%
    mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) 
-test.data %>% # CHANGE THIS!!!
-  ggplot()+
-  geom_hline(yintercept=0, linetype='dashed')+
-  geom_smooth(aes(x=Latitude, y=tsm, color=pltsp), method='lm')+
-  geom_point(aes(x=Latitude, y=tsm, color=pltsp))+theme_bw()
+test.data %>%
+  left_join(se_r, by='rowid') %>%
+  ggplot()+geom_sf(data=se %>% st_make_valid() %>% st_union())+
+  geom_sf(aes(geometry=geometry, color=tsm, fill=tsm))+
+  facet_wrap(~species)+
+  scale_color_gradient2('Warming\nTolerance', 
+                        #colors = met.brewer('OKeeffe1'),
+                        aesthetics = c('fill','color'))+
+  theme_void()+
+  theme(strip.text = element_text(size=8))
+ggsave('results/FigS2_tsm_results.jpg', width=6.5, height=6.5)
 ```
 
 ```{r}
-#heiarchical linear regression? https://www.r-bloggers.com/2012/10/hierarchical-linear-models-and-lmer/
+test.data %>% # CHANGE THIS!!!
+  ggplot()+
+  geom_hline(yintercept=0, linetype='dashed')+
+  geom_smooth(aes(x=Latitude, y=tsm, color=pltsp, linetype=pltsp), method='lm', formula= 'y~x', level=.0)+
+  geom_point(aes(x=Latitude, y=tsm, color=pltsp), alpha=.5)+
+  scale_color_manual('species', values=met.brewer('Renoir'),
+                     aesthetics = c('fill','color')) +
+  scale_linetype_manual('species', values=c(rep(c(1,2),6),1))+
+  scale_y_continuous('Warming Tolerance')+
+  theme_classic()
+ggsave('results/FigS3_lat_tsm_raw.jpg', width=4, height=4)
+```
 
-orig_fit_brms<-brm(bf(tsm ~ Latitude, Latitude ~ rng)+
-                bf(adults ~ top30quant+ClusD)+
-                set_rescor(F),
-                data=sem_df, family='poisson', chains=ch, iter=nit,
-                refresh=0, silent = 0, save_pars=save_pars(all=T))
+DOUBLE CHECK TRAITS!!!
 
-
+```{r}
 intra.df<-test.data %>%
   left_join(rcs %>% filter(extent == 'North America'), by='species') %>%
   select(species, Longitude, Latitude, max_TC, tsm, AOO_WS_sqkm, sd_bio_5) %>%
@@ -234,7 +248,7 @@ intra.df<-test.data %>%
   group_by(species) %>%
   mutate(tsm_c=tsm-mean(tsm),
          tsmv=1/(abs(rnorm(n(),0,.5))^2)) %>%
-  arrange(spF) %>%
+  arrange(spF) 
 rngs<-intra.df %>% distinct(spF, range) %>% arrange(spF)
 ```
 
@@ -243,14 +257,14 @@ library(rjags)
 model_string<- "model{
   # Data model #
   for(i in 1:n.counts){
-    tsm[i] <- beta[spp[i]]*lat[i]+alpha[spp[i]]
+    tsm[i] <- beta[spp[i]]*(lat[i]-latmean)+alpha[spp[i]]
     E.tsm[i] ~ dnorm(tsm[i], tau.tsm[i])
   }
 
   # Range effect #
   for(s in 1:n.spp){
-    beta.mu[s] <- beta.l*range[s]+alpha.l
-    beta[s] ~ dnorm(beta.mu[s], tau.beta)
+    beta.mu[s] <- beta.l*range[s]+alpha.l # don't put toward center b/c already transformed
+    beta[s] ~ dnorm(beta.mu[s], tau.beta) #shared error
     alpha[s] ~ dnorm(0.0, 1e-6) 
   }
   tau.beta ~ dgamma(0.001,0.001)
@@ -261,16 +275,17 @@ lat.model <- jags.model(textConnection(model_string),
                         data=list(E.tsm = intra.df$tsm,
                                   tau.tsm = intra.df$tsmv,
                                   lat = intra.df$Latitude,
+                                  latmean=mean(intra.df$Latitude),
                                   spp = intra.df$spF,
                                   n.counts=nrow(intra.df),
                                   n.spp=length(unique(intra.df$spF)),
                                   range=rngs$range),
-                        n.chains=2, n.adapt=100)
-  update(lat.model, 200) 
+                        n.chains=3, n.adapt=500)
+  update(lat.model, 500) 
   lat.mcmc<-coda.samples(lat.model,
                          variable.names = c("beta.mu","alpha",
                                             "beta.l","alpha.l", "tau.beta"),
-                         n.iter=300, thin=3)
+                         n.iter=1000, thin=3)
 lat.sum<-summary(lat.mcmc)
 gelman.diag(lat.mcmc, multivariate = F)
 ```
@@ -303,21 +318,43 @@ lat.mcmc.df<-bind_rows(as.data.frame(lat.mcmc[[1]]), as.data.frame(lat.mcmc[[2]]
 lat.sum$quantiles[rownames(lat.sum$quantiles)=='beta.l',]
 # direction of relationship between range size and slope
 # between latitude & centered tsm
-ecdf(lat.mcmc.df$beta.l)(0) 
+1-ecdf(lat.mcmc.df$beta.l)(0) 
 
 lat.sum$quantiles[rownames(lat.sum$quantiles)=='alpha.l',]
 ecdf(lat.mcmc.df$alpha.l)(0) 
 ```
 
 ```{r}
+plot_grid(lat.reg.out %>%
+  filter(stat =='beta', !(parameter %in% c('beta.l','alpha.l')))  %>%
+  ggplot()+
+  geom_linerange(aes(x=rng, ymin=`2.5%`, ymax=`97.5%`, color=species))+
+  geom_point(aes(x=rng, y=`50%`, color=species))+ 
+  scale_color_manual('species', values=met.brewer('Renoir'),
+                     aesthetics = c('fill','color')) +
+    scale_y_continuous("Species' slope\nWarming Tolerance deg. C / deg. Latitude")+
+    scale_x_continuous("Area of Occupancy", labels=scales::comma)+
+  theme_classic()+theme(legend.position='none'),
+  lat.mcmc.df %>% ggplot()+geom_vline(xintercept=0)+
+    geom_density(aes(x=beta.l))+theme_classic()+
+    scale_x_continuous("Coefficient between Species' slope & Range Size")+
+    ggtitle("Support for Brattstrom's Rule"),
+ncol=1, rel_heights = c(.6, .4), labels='AUTO')
+ggsave('results/Fig4_bayesian_resul.jpg', width=3.5, height=6)
+```
+
+
+```{r}
 lat.reg.out %>% 
   filter(stat %in% c('alpha','beta'), !(parameter %in% c('beta.l','alpha.l')))  %>%
-  select(stat, species, `2.5%`,`50%`,`97.5%`) %>%
+  dplyr::select(stat, species, `2.5%`,`50%`,`97.5%`) %>%
   pivot_wider(names_from=stat, values_from=c(`2.5%`,`50%`,`97.5%`))%>%
   rename(b0=`50%_alpha`, b1=`50%_beta`) %>%
   ggplot() +
+  geom_point(data=test.data, aes(x=Latitude-mean(Latitude), y=tsm, color=factor(species)))+
   geom_abline(aes(slope=b1, intercept = b0, color=factor(species))) +
-  xlim(0, 90) +
+  xlim(min(test.data$Latitude)-mean(test.data$Latitude)-5,
+       max(test.data$Latitude)-mean(test.data$Latitude)+5) +
   ylim(0, 10) 
 ```
 
@@ -325,23 +362,28 @@ lat.reg.out %>%
 ## Cumulative warming tolerance across range
 
 ```{r}
+paletteer_d("colorBlindness::SteppedSequential5Steps")
 test.data %>% 
   ggplot()+
-  geom_vline(xintercept = c(0,2), linetype='dashed')+
-    stat_ecdf(aes(x = tsm, color = pltsp, linetype=pltsp), 
-              geom = "step",size=1.1, alpha=0.8)+
+  geom_vline(xintercept = c(0,2), color='lightgrey')+
+    stat_ecdf(aes(x = tsm, color = pltsp), lwd=3, geom = "step", alpha=0.7)+
+  stat_ecdf(aes(x = tsm, linetype=pltsp), geom = "step", alpha=0.9)+
   scale_y_continuous('Cumulative Distribution')+
   scale_x_continuous(expression('Warming Tolerance ('*degree*C*')'),
                      breaks=seq(-2,12,2))+
-  scale_color_manual('species', values=sppal[sppal$pltsp %in% test.data$pltsp,]$col)+
-  scale_linetype_manual('species', values=sppal[sppal$pltsp %in% test.data$pltsp,]$shp)+
+  scale_color_manual('species', values=met.brewer('Renoir'))+
+                       #sppal[sppal$pltsp %in% test.data$pltsp,]$col)+
+  scale_linetype_manual('species', values=c(rep(c(1,2),6),1))+
+                          #sppal[sppal$pltsp %in% test.data$pltsp,]$shp)+
   theme_classic()+
   theme(legend.position='bottom', legend.direction = 'vertical',
         legend.margin = margin(t=-10,l=-30),
-        legend.text = element_text(size=8,  face='italic'))+
+        legend.text = element_text(size=8,  face='italic'),
+        axis.text = element_text(size=9),
+        axis.title = element_text(size=9))+
     guides(color=guide_legend(ncol=3, size=2),
            linetype=guide_legend(ncol=3, size=2))
-ggsave('results/Fig2_cumdist.jpg', width=3.3, height=4.5)
+ggsave('results/Fig2_cumdist.jpg', width=3.5, height=4.5)
 ```
 
 ```{r}
@@ -354,7 +396,7 @@ data.frame(x=rep(1:2, 10),
 ```{r}
 # calculate, of the occupied cells, the proportion that are below 0 
 test.data %>%
-  select(species, tsm) %>%
+  dplyr::select(species, tsm) %>%
   group_by(species) %>%
   summarize(n=n(), 
             pdis_b2=ecdf(tsm)(2)*100,
