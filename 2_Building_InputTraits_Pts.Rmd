@@ -7,7 +7,7 @@ output: pdf_document
 ```{r setup, include=FALSE}
 library(tidyverse); library(knitr); library(ggrepel); library(cowplot)
 library(Rphylopars); library(ggtree); library(treeplyr); library(phytools)
-library(sf); library(maps);library(stars)
+library(sf); library(geodata);library(stars)
 library(nlme)
 knitr::opts_chunk$set(echo = FALSE)
 focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
@@ -26,7 +26,7 @@ trait_db<-read_csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv', show_col_ty
 knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/ATraiU 2.0/manuscript/summary_figure_combo.jpg")
 ```
 
-```{r}
+```{r trait completeness, echo=F}
 kable(trait_db %>% 
         dplyr::select(-refIDs, -arrhythmic, -crepuscular, -nocturnal, -diurnal) %>%
         pivot_longer(-species) %>%
@@ -44,7 +44,101 @@ knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/input_data/Johnso
 
 ## Anuran Phylogeny
 
-Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for.
+Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for. To improve the fit of this imputation, for our focal species, we are recalculating means that remove traits from far locals (e.g., Canada). 
+
+```{r}
+new_trait_mean<-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%  filter(species %in% focal_spp, 
+         lifeStage %in% c('adult','unknown'), 
+         traitName != 'Activity', 
+         !is.na(verbatimLocality)) %>%
+  group_by(species, traitName) %>% mutate(n=n()) %>%
+  filter(n != 1) # if only one value, won't exclude
+#new_trait_mean$verbatimLocality %>% unique()
+trait_filt <- new_trait_mean %>% 
+  filter(!(verbatimLocality %in% c("James River and Big Sioux River, South Dakota",
+                                 "44.57229Â°N, 97.02486Â°W", 
+                                 "45 34'57â€\u009dN 64, 58'37â€\u009dW",
+                                 "44Â°33'N, 78Â°33'W", "45Â°35'N, 78Â°30'W",
+                                 "44Â°50'N, 68Â°35'W", 
+                                 "Meadow Valley Wash between Carp & Elgin, Lincoln County, Nevada",
+                                 "Andes of Veneszuela",
+                                 "NAD 27: UTM Zone 17: N5127200m, E304000m")), 
+          !grepl("48 N, 123 W", verbatimLocality),
+          !grepl("South Dakota", verbatimLocality),
+           !grepl("northwest", verbatimLocality),
+           !grepl("Maine", verbatimLocality),
+           !grepl("Minnesota", verbatimLocality),
+           !grepl("MN", verbatimLocality),
+           !grepl("Ontario", verbatimLocality),
+           !grepl("Quebec", verbatimLocality),
+         !grepl("Ottawa", verbatimLocality),
+           !grepl("British Columbia", verbatimLocality))
+trait_restrict <- group_by(species, traitName) %>%
+  summarize(mean_val=mean(as.numeric(traitValue)), sd_val=sd(as.numeric(traitValue)))
+```
+
+building base maps
+
+```{r}
+can<-gadm('can', level=1, tempdir()) %>% st_as_sf()
+usa<-gadm('usa', level=1, tempdir()) %>% st_as_sf() %>% 
+  filter(!(NAME_1 %in% c('Alaska','Hawaii')))
+se<-usa %>% filter(NAME_1 %in% c('Mississippi', 'Georgia', 'Florida', 'South Carolina', 
+                           'North Carolina', 'Virginia', 'Alabama', 'Tennessee')) %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+```
+
+
+```{r}
+left_join(usa, trait_filt %>%
+  mutate(NAME_1=case_when(grepl('Texas', verbatimLocality) ~ 'Texas',
+                      grepl('Missouri', verbatimLocality) ~ 'Missouri',
+                      grepl('Illinois', verbatimLocality) | 
+                        grepl('IL', verbatimLocality) ~ 'Illinois',
+                      grepl('Ohio', verbatimLocality) |
+                        grepl(', OH', verbatimLocality) ~ 'Ohio',
+                      grepl('New Jersey', verbatimLocality) ~ 'New Jersey',
+                      grepl('Kentucky',verbatimLocality) ~ 'Kentucky',
+                      grepl('Michigan', verbatimLocality)~'Michigan', 
+                      grepl('New York', verbatimLocality) |
+                        grepl('NY', verbatimLocality) ~ 'New York',
+                      grepl("Maine", verbatimLocality) ~ 'Maine',
+                      grepl("Minnesota", verbatimLocality)|
+                        grepl('MN', verbatimLocality) ~'Minnesota',
+                      grepl('Connecticut', verbatimLocality)~'Connecticut',
+                      grepl('Northeast US', verbatimLocality)|
+                        grepl('Massachusetts', verbatimLocality)~'Massachusetts',
+                      grepl('Indiana', verbatimLocality)~'Indiana',
+                      grepl('Pennsylvania', verbatimLocality)~'Pennsylvania',
+                      grepl('Arkansas', verbatimLocality)~'Arkansas',
+                      grepl('Louisiana', verbatimLocality)~'Louisiana',
+                      grepl('Maryland', verbatimLocality)~'Maryland',
+                      grepl('Delaware', verbatimLocality)~'Delaware',
+                      grepl('rhode island', verbatimLocality) ~ 'Rhode Island',
+                      grepl('Kansas', verbatimLocality) ~ 'Kansas',
+                      grepl('Oklahoma', verbatimLocality)|
+                        verbatimLocality == 'UTM zone 15; 233905E, 4047104N, NAD 83' ~ 'Oklahoma',
+                      verbatimLocality %in% c("41 17' N, 83 37' W", "41 17' N, 83 13' W",
+                                              "40 37' N, 83 17' W") ~ 'Ohio',
+                      verbatimLocality == "44 28'45\"N, 87 37'15\" W" ~ 'Wisconsin',
+                      verbatimLocality == "N 0695928 and W 4482919, zone 15 using NAD27 CONUS map datum in UTM" ~ 'Illinois',
+         T ~ 'study area')) %>%
+    distinct(traitName, NAME_1) %>%
+    group_by(NAME_1) %>% summarize(n_traits=length(unique(traitName))),
+  by='NAME_1') %>%
+  mutate(n_traits = ifelse(NAME_1 %in% c('South Dakota', 'Nevada', "Maine", "Minnesota"), 0,n_traits)) %>%
+  ggplot()+
+  geom_sf(data=can %>%
+            mutate(n_traits=ifelse(NAME_1 %in% c("Ontario","Quebec","British Columbia", "Nova Scotia"), 0, NA)),
+          aes(fill=n_traits))+
+  geom_sf(aes(fill=n_traits))+
+  geom_sf(data=se %>% st_transform(st_crs(usa)), fill='lightgrey')+
+  theme_void()
+```
+
+
+
+
 
 ```{r phylogeny, echo = F, fig.height=4.5}
 taxa_table<-trait_db %>% dplyr::select(species) %>%
