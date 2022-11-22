@@ -1,0 +1,417 @@
+---
+title: "Results of the Mechanistic Niche Models Across Space"
+author: "TP DuBose"
+date: "7/14/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
+library(ggrepel); library(cowplot); library(ggfortify)
+library(rjags)
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
+                 fill=T, plot=F)) %>%
+  st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+library(MetBrewer)
+tmplab<-function(x){paste0(x, '°C')}
+```
+
+# Intraspecific Comparisons
+
+We use a for loop similar to the one used in our one point analysis () to run a MNM at many points within the Southeast United States (code found XXX). The output of that for loop is analyzed below. 
+
+```{r}
+rcs<-read.csv('../National-RCS/Anuran_RCS_and_components_20220908.csv')
+ecto_out <- read.csv('intermediate_results/summarized_bodytemps.csv')
+micro_out <- read.csv('intermediate_results/microclimate_info.csv')
+```
+
+This gives us data for `r length(unique(ecto_out$rowid))` randomly sampled, but occupied points across our study region.
+
+```{r distribution of WT, echo=F, fig.width=6.6, fig.height=3}
+ecto_out %>% select(species, WT_25, WT_75, WT_ptmean) %>%
+  pivot_longer(-species) %>%
+  mutate(better.labs=case_when(name == 'WT_25' ~ '25th Quantile',
+                               name == 'WT_75' ~ '75th Quantile',
+                               name == 'WT_ptmean' ~ 'Mean')) %>%
+  ggplot()+
+  geom_density(aes(x=value, color=species)) +
+  facet_wrap(~better.labs, scale='free_x') +
+  scale_color_manual('species', values=met.brewer('Renoir'))+
+  theme_classic()+
+  ggtitle('Daily Mean Warming Tolerance')+
+  theme(title = element_text(size=10), 
+        legend.position='bottom', legend.direction = 'vertical',
+        legend.margin = margin(t=-10,l=-30),
+        legend.text = element_text(size=8,  face='italic'),
+        axis.text = element_text(size=9),
+        axis.title = element_text(size=9))+
+    guides(color=guide_legend(ncol=3, size=2))
+
+ecto_out %>% select(species, WT_ptmin) %>%
+  ggplot()+
+  geom_histogram(aes(x=WT_ptmin, fill=species), binwidth = .5) +
+  scale_fill_manual('species', values=met.brewer('Renoir'))+
+  labs(x='Daily Mean Warming Tolerance', y='Count of Points')+
+  theme_classic()+
+  theme(legend.position='bottom', legend.direction = 'vertical',
+        legend.margin = margin(t=-10,l=-30),
+        legend.text = element_text(size=8,  face='italic'),
+        axis.text = element_text(size=9),
+        axis.title = element_text(size=9))+
+    guides(fill=guide_legend(ncol=3, size=2))
+```
+
+```{r sample size mean table, echo=F}
+kable(ecto_out %>% group_by(species) %>%
+  summarize(n_pts=n(), 
+            meanWT=mean(WT_ptmean),
+            minWT=min(WT_ptmin),
+            mean_days=mean(nDays)) %>%
+  mutate(across(-c(species, n_pts), ~round(.x, 2))),
+  caption='Sample size and summarized indicators of warming tolerance (WT) for each species',
+  col.names = c('Species', 'N points', 'mean daily mean WT', 'minimum daily minimum WT', 'mean Days CTmax is exceeded'))
+```
+
+So we can first visualize each species result across space with the plot below. 
+
+```{r species maps, echo=F, fig.width=6.5, fig.height=7}
+test.data<-ecto_out %>% 
+  left_join(micro_out, by='rowid') %>%
+   mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) 
+test.data %>%
+  st_as_sf(coords=c('long','lat'),
+           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  ggplot()+geom_sf(data=se %>% st_make_valid() %>% st_union())+
+  geom_sf(aes(geometry=geometry, color=WT_ptmin, fill=WT_ptmin))+
+  facet_wrap(~species)+
+  scale_color_gradient2('Minimum\nWarming\nTolerance', 
+                        #colors = met.brewer('OKeeffe1'),
+                        aesthetics = c('fill','color'))+
+  theme_void()+
+  theme(strip.text = element_text(size=8))
+ggsave('results/FigS2_tsm_results.jpg', width=6.5, height=6.5)
+```
+
+We already see some differences among species with G. carolinensis generally having large warming tolerance and L. palustris having a smaller warming tolerance. We can compare those differences across our latitudinal gradient using the data we have collected.
+
+```{r lat wt plot with raw data, fig.width=4, fig.height=4, echo=F}
+test.data %>% 
+  ggplot()+
+  geom_hline(yintercept=0, linetype='dashed')+
+  geom_smooth(aes(x=lat, y=WT_ptmin, color=pltsp, linetype=pltsp), 
+              method='lm', formula= 'y~x', level=.0)+
+  geom_point(aes(x=lat, y=WT_ptmin, color=pltsp), alpha=.1)+
+  scale_color_manual('species', 
+                     values=met.brewer('Renoir'),
+                     aesthetics = c('fill','color')) +
+  scale_linetype_manual('species', values=c(1,2,1,2,1,2,1,2,1,2,1,2,1), guide='none')+
+  scale_y_continuous('Warming Tolerance')+
+  scale_x_continuous('Latitude')+
+  theme_classic()+
+  guides(colour = guide_legend(override.aes = list(linetype = c(1,1,2,1,2,1,2,1,2,1,2,1))))
+
+ggsave('results/FigS3_lat_tsm_raw.jpg', width=4, height=4)
+```
+
+The lines above are simple linear models, unique to each species. We see that species vary in their estimated warming tolerance a lot and in their relationship between latitude and warming tolerance. The most extreme we can spot are G. carolinensis and L. catesbeianus, which have flat lines. G. carolinensis buries and L. catesbeianus 
+
+```{r}
+traits.df<-read.csv('input_data/inputed_physio_traits_11152022.csv')  %>%
+  select(species, s.fossorial:Tmerge) %>%
+  select(-starts_with('Tforage'), -Tbask)
+kable(traits.df %>%
+  filter(species %in% c('Gastrophryne carolinensis', 'Lithobates catesbeianus',
+                        'Lithobates palustris', 'Lithobates clamitans')) %>% 
+  pivot_longer(-species) %>% rename(Trait=name) %>% 
+    pivot_wider(names_from=species, values_from = value),
+  caption='Traits of our outlier species above. 1 in behavior traits means that behavior is allowed, 0 means it is not allowed (i.e., none of these species are allowed to climb)',
+  digits=1)
+```
+
+Below is a PCA of the unique interspecific traits used to build the MNM models. It is just to aid in understainding the plot above. 
+
+```{r}
+trait.pca<-prcomp(traits.df[,-1], center = TRUE, scale = TRUE)
+autoplot(trait.pca, data=traits.df,
+         colour = 'species', size=3,
+         loadings = TRUE, loadings.colour = 'black', loadings.label = TRUE, loadings.label.size = 3)+
+  scale_color_manual('species',values=c(met.brewer('Renoir')[1:6], 'grey', met.brewer('Renoir')[7:12])) +
+  theme_classic()
+```
+
+We will use a Bayesian hierarchical model to test if a species range size contributes to the slope between its estimated warming tolerance and latitude. We first set up the input data, where we center and log transform species range (to aid with convergence). 
+
+```{r}
+meanrng<-rcs %>% filter(species %in% unique(test.data$species),
+               extent=='North America') %>% 
+  pull(AOO_WS_sqkm) %>% mean()
+intra.df<-test.data %>%
+  left_join(rcs %>% filter(extent == 'North America'), by='species') %>%
+  select(species, long, lat, WT_ptmin, AOO_WS_sqkm, sd_bio_5) %>%
+  rename(Longitude=long, Latitude=lat) %>%
+  mutate(spF=factor(species),
+         range=log10(AOO_WS_sqkm)-log10(meanrng)) %>%
+  group_by(species) %>%
+  mutate(wt=WT_ptmin-mean(WT_ptmin)) %>%
+  arrange(spF) 
+rngs<-intra.df %>% distinct(spF, species, range, AOO_WS_sqkm) %>% arrange(spF)
+```
+
+We need to set uninformative but possible priors for our precision estimates (tau), slopes (beta), and intercepts (alpha). 
+
+```{r prior distributions, echo=F, fig.width=6.5, fig.height=2}
+plot_grid(ggplot()+
+            geom_density(data=data.frame(x=rgamma(3000, 0.01, 0.01)), aes(x=x))+
+            ggtitle('Precision or Tau')+theme_classic(),
+          ggplot()+
+            geom_density(data=data.frame(x=rnorm(3000, sd=25)) %>%
+                             filter(x < 25, x > -25), aes(x=x))+ggtitle('Slope or Beta.mu')+
+            theme_classic()+theme(axis.title.y=element_blank())+scale_x_continuous('deg WT / deg Lat'),
+          ggplot()+geom_density(data=data.frame(x=rnorm(3000, sd=100)) %>%
+                             filter(x < 50, x > -50), aes(x=x), binwidth=5)+ggtitle('Intercept or Alpha')+
+            theme_classic()+theme(axis.title.y=element_blank())+scale_x_continuous('WT at mean Lat'),
+          ggplot()+
+            geom_density(data=rngs, aes(x=range/0.5), color='red')+
+            geom_density(data=rngs, aes(x=range/-0.5), color='red')+
+            geom_density(data=data.frame(x=rnorm(3000, sd=5)) %>%
+                             filter(x < 50, x > -50), aes(x=x))+ ggtitle('Beta.l or wt change / range size')+
+            theme_classic()+theme(axis.title.y=element_blank())+scale_x_continuous('WT/Lat/log(aoo sq km)'), 
+          nrow = 1)
+```
+
+We know we didn't sample the true warming tolerance but estimated it, and so let our estimates be samples of the true population with mean warming tolerance (tsm) and precision (tau.tsm). We use MCMC sampling to get the posterior distribution of the true warming tolerance at that latitude. We then linearly regress latitude to true warming tolerance with [beta] as the slope (degree warming tolerance / degree latitude) and [alpha] as the intercept. We center the latitude (x = lat - mean(lat)), so that alpha is the mean warming tolerance at the mean latitude (`r mean(intra.df$Latitude)`). 
+
+```{r}
+model_string<- "model{
+  # Data model #
+  for(i in 1:n.counts){
+    tsm[i] <- beta[spp[i]]*(lat[i]-latmean)+alpha[spp[i]]
+    E.tsm[i] ~ dnorm(tsm[i], tau.tsm)
+  }
+  tau.tsm ~ dgamma(0.001, 0.001) 
+
+  # Range effect #
+  for(s in 1:n.spp){
+    beta.mu[s] <- beta.l*range[s]+alpha.l # don't put toward center b/c already transformed
+    beta[s] ~ dnorm(beta.mu[s], tau.beta) #shared error
+    alpha[s] ~ dnorm(0.0, 100)T(-50,50)
+    
+  }
+  tau.beta ~ dgamma(0.001,0.001)
+  beta.l ~ dnorm(0.0, 5)T(-10,10)
+  alpha.l ~ dnorm(0.0, 100)T(-40,40)
+}"
+lat.model <- jags.model(textConnection(model_string), 
+                        data=list(E.tsm = intra.df$WT_ptmin,
+                                  #tau.tsm = intra.df$tsmv,
+                                  lat = intra.df$Latitude,
+                                  latmean=mean(unique(intra.df$Latitude)),
+                                  spp = intra.df$spF,
+                                  n.counts=nrow(intra.df),
+                                  n.spp=length(unique(intra.df$spF)),
+                                  range=rngs$range),
+                        n.chains=3, n.adapt=7500)
+  update(lat.model, 7500) 
+  lat.mcmc<-coda.samples(lat.model,
+                         variable.names = c("beta.mu","alpha", "tau.tsm",
+                                            "beta.l","alpha.l", "tau.beta"),
+                         n.iter=15000, thin=5)
+lat.sum<-summary(lat.mcmc)
+gelman.diag(lat.mcmc, multivariate = F)
+```
+
+OK, I first create a dataframe to help me visualize the results. This translates the rownames into the type of parameters and the species number into the species name.
+
+```{r build plotting df lat reg, warning=F}
+lat.reg.out<-lat.sum$quantiles %>% as_tibble() %>%
+  mutate(parameter=row.names(lat.sum$quantiles),
+         statistic=substr(parameter, 1,4),
+         spnum=as.numeric(gsub('\\]','', 
+                               gsub('alpha\\[','',
+                                    gsub('beta.mu\\[', '', 
+                                         gsub('tau.tsm\\[','',parameter)))))) %>%
+  left_join(rngs %>% mutate(spnum=as.numeric(spF)), by='spnum') %>%
+   mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) 
+```
+
+```{r show sum bayes out, echo=F}
+kable(lat.reg.out %>% select(species, parameter, everything()) %>% 
+        select(-spnum, -pltsp, -AOO_WS_sqkm, -range, -spF, -statistic) %>%
+        sample_n(5),
+      caption='Example of output dataframe, mainly used for plotting.',
+      digits = 3)
+```
+
+We can also investigate how species' aoo impacted species slope between warming tolerance and latitude by describing the posterior distribution of the coefficients on the range/slope regression. beta.l describes how slope changes with range (deg C. / deg Lat / sq km) and alpha.l is the average warming tolerance at mean range size.
+
+```{r}
+lat.mcmc.df<-bind_rows(as.data.frame(lat.mcmc[[1]]), as.data.frame(lat.mcmc[[2]])) 
+lat.sum$quantiles[rownames(lat.sum$quantiles)=='beta.l',]
+# direction of relationship between range size and slope
+# between latitude & centered tsm
+1-ecdf(lat.mcmc.df$beta.l)(0) 
+
+lat.sum$quantiles[rownames(lat.sum$quantiles)=='alpha.l',]
+```
+
+So it looks like there is a `r round((1-ecdf(lat.mcmc.df$beta.l)(0))*100, 1)`% probability (given our model and data), that range size is positively related to the slope in warming tolerance (or how quickly warming tolerance shifts across a species range). So there might be some support for Brattstrom's rule. 
+
+```{r}  
+plot_grid(lat.reg.out %>%
+  filter(statistic =='beta', !(parameter %in% c('beta.l','alpha.l')))  %>%
+  ggplot()+
+    geom_hline(yintercept=0, linetype='dashed', color='lightgrey')+
+  geom_linerange(aes(x=AOO_WS_sqkm, ymin=`2.5%`, ymax=`97.5%`, color=species))+
+  geom_text_repel(aes(x=AOO_WS_sqkm, y=`50%`, label=pltsp), 
+                  min.segment.length = 0.01, max.overlaps = 9, size=2)+
+  geom_point(aes(x=AOO_WS_sqkm, y=`50%`, color=species))+ 
+  scale_color_manual('species', values=met.brewer('Renoir'),
+                     aesthetics = c('fill','color')) +
+    scale_y_continuous("Species' slope\nWarming Tolerance deg. C / deg. Latitude")+
+    scale_x_continuous("Area of Occupancy", labels=scales::comma)+
+  theme_classic()+theme(legend.position='none'),
+  lat.mcmc.df %>% ggplot()+geom_vline(xintercept=0)+
+    geom_density(aes(x=beta.l))+theme_classic()+
+    scale_x_continuous("Coefficient between Species' slope & Range Size")+
+    ggtitle("Support for Brattstrom's Rule"),
+ncol=1, rel_heights = c(.6, .4), labels='AUTO')
+ggsave('results/Fig4_bayesian_resul.jpg', width=3.5, height=6)
+```
+
+## Cumulative warming tolerance across range
+
+We can next count the proportion of the species range / sampled points that have negative (<0) or little (<2) warming tolerance. We use 2C as a heuristic cut off because of the common idea that temperatures will warm by 2 C. In the graph below, species whose curves are closer to the left are more thermally sensitive and have a higher proportion of their ranges with lower warming tolerance.
+
+```{r cumdist plot, echo=F, fig.width=5, fig.height=2.5}
+test.data %>% 
+  ggplot()+
+  geom_vline(xintercept = c(0,2), color='lightgrey')+
+    stat_ecdf(aes(x = WT_ptmin, color = pltsp), lwd=3, geom = "step", alpha=0.7)+
+  stat_ecdf(aes(x = WT_ptmin, linetype=pltsp), geom = "step", alpha=0.9)+
+  scale_y_continuous('Cumulative Distribution')+
+  scale_x_continuous(expression('Warming Tolerance ('*degree*C*')'),
+                     breaks=seq(-2,12,2))+
+  scale_color_manual('species', values=met.brewer('Renoir'))+
+                       #sppal[sppal$pltsp %in% test.data$pltsp,]$col)+
+  scale_linetype_manual('species', values=c(rep(c(1,2),6),1))+
+                          #sppal[sppal$pltsp %in% test.data$pltsp,]$shp)+
+  theme_classic()+
+  theme(legend.position='bottom', legend.direction = 'vertical',
+        legend.margin = margin(t=-10,l=-30),
+        legend.text = element_text(size=8,  face='italic'),
+        axis.text = element_text(size=9),
+        axis.title = element_text(size=9))+
+    guides(color=guide_legend(nrow=3, size=2),
+           linetype=guide_legend(nrow=3, size=2))
+ggsave('results/Fig2_cumdist.jpg', width=3.5, height=4.5)
+```
+
+Quantifying this, we can see that some species exist very close to their thermal limits. 
+
+```{r table of cumdist res, echo=F}
+# calculate, of the occupied cells, the proportion that are below 0 
+kable(test.data %>%
+  dplyr::select(species, WT_ptmin) %>%
+  group_by(species) %>%
+  summarize(n=n(),
+            pdis_b2=round(ecdf(WT_ptmin)(2)*100,3),
+            pdis_b0=round(ecdf(WT_ptmin)(0)*100,3),
+            n_cellsb0=pdis_b0*n/100) %>% arrange(desc(pdis_b2), desc(pdis_b0)) %>%
+    select(-n),
+  caption='Cumulative distribution of points where warming tolerance (estimated body temperature - CTmax) is below 0 and 2 degrees',
+  col.names=c('Species', '% distribution <2', '% distribution < 0', 'n points <0'), digits=1)
+```
+
+# Ensemble Comparison
+
+We can take the output of the intraspecific comparisons and, instead of investigating variation among species, we can investigate variation across space. Below is how species richness and median warming tolerance varies across our study area.
+
+```{r ensemble analysis}
+ens.df<-test.data %>% # removing points where species do not cooccur
+  group_by(rowid, lat, long) %>%
+  summarize(n_spp=n_distinct(species),
+            wt_mean=mean(WT_ptmin),
+            wt_sd=sd(WT_ptmin), .groups='drop') %>%
+  filter(n_spp != 1)
+ens.sf <-ens.df %>%
+  st_as_sf(coords=c('long','lat'),
+           crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84"))
+```
+
+So there are `r nrow(ens.df)` points that have more that two anuran species occurring there. 
+
+```{r ensemble map, echo=F, fig.width=6.5, fig.height=3}
+plot_grid(
+  ggplot(ens.sf)+
+    geom_sf(data=se %>% st_make_valid() %>% st_union())+
+    geom_sf(aes(color=n_spp, fill=n_spp, geometry=geometry))+
+    scale_color_viridis_c('n\nspecies', breaks=c(2,5,9,13), option='A', 
+                          aesthetics = c('fill','color'))+
+    theme_void()+ theme(legend.position = 'top'),
+  ggplot(ens.sf)+
+    geom_sf(data=se %>% st_make_valid() %>% st_union())+
+    geom_sf(aes(color=wt_mean, fill=wt_mean, geometry=geometry))+
+    scale_color_gradient2('mean\nwarm\ntol.', aesthetics = c('fill','color'), labels=tmplab)+
+    theme_void()+ theme(legend.position = 'top'), 
+  ens.df %>% 
+    select(lat, long, wt_mean) %>% rename(Longitude=long, Latitude=lat) %>%
+    pivot_longer(-wt_mean) %>%
+    ggplot()+geom_point(aes(x=value, y=wt_mean), alpha=0.3)+
+    facet_wrap(~name, scales='free_x', ncol=1)+
+    scale_y_continuous('Focal Species\nMean Warming Tolerance',
+                        labels=tmplab)+
+    scale_x_continuous('Decimal Degrees')+
+    theme_classic(),
+  nrow=1, labels='AUTO')
+ggsave('results/Fig3_ensemble.jpg', width=6.5, height=3)
+```
+
+We might have some support for the temperate sensitivity hypothesis. 
+
+```{r}
+model_string_ens<- "model{
+  # Data model #
+  for(i in 1:n.pts){
+    tsm[i] <- beta*(lat[i]-latmean)+alpha
+    E.tsm[i] ~ dnorm(tsm[i], tau.tsm[i])
+  }
+  beta ~ dnorm(0.0, 1e-6)
+  alpha ~ dnorm(0.0, 1e-6)
+}"
+ens.model <- jags.model(textConnection(model_string_ens), 
+                        data=list(E.tsm = ens.df$wt_mean,
+                                  tau.tsm = ens.df$wt_sd,
+                                  lat = ens.df$lat,
+                                  latmean=mean(ens.df$lat),
+                                  n.pts=nrow(ens.df)),
+                        n.chains=3, n.adapt=500)
+  update(ens.model, 500) 
+  ens.mcmc<-coda.samples(ens.model,
+                         variable.names = c("beta","alpha"),
+                         n.iter=1000, thin=3)
+summary(ens.mcmc)
+gelman.diag(ens.mcmc)
+```
+
+Finally, if we wanted to identify the points where there is more anuran species that are more thermally sensitive species, we can identify points in the highlighted quadrant (red).
+
+```{r ens biplot, echo=F, fig.width=6, fig.height=3.5}
+plot_grid(ggplot(ens.df) +
+  geom_vline(xintercept=max(ens.df$n_spp)/2, linetype='dashed')+
+  geom_hline(yintercept=mean(ens.df$wt_mean), linetype='dashed')+
+  geom_rect(aes(xmin=max(n_spp)/2, xmax=Inf, ymin=-Inf, ymax=mean(wt_mean)), 
+            color='red', fill=NA, alpha=0.1)+
+  geom_point(aes(x=n_spp, y=wt_mean), position=position_jitter(.25), alpha=0.4)+
+    scale_y_continuous('Focal Species\nMean Warming Tolerance',
+                        labels=tmplab)+
+    scale_x_continuous('N Species')+
+  theme_classic(),
+ens.sf %>% filter(n_spp > max(n_spp)/2,
+                  wt_mean > mean(wt_mean)) %>%
+  ggplot()+geom_sf(data=se %>% st_make_valid() %>% st_union) +
+  geom_sf(color='red')+theme_void())
+
+```

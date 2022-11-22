@@ -1,0 +1,192 @@
+---
+title: "One-Point Interspecific Comparison"
+author: "TP DuBose"
+date: "11/18/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
+library(ggrepel); library(cowplot)
+library(NicheMapR)
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
+                 fill=T, plot=F)) %>%
+  st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+library(MetBrewer)
+sppal<-read.csv('input_data/inputed_physio_traits_11152022.csv') %>%
+  distinct(family, species) %>%
+  mutate(col=case_when(family == 'Scaphiopodidae'~met.brewer('Lakota')[2],
+                       family == 'Hylidae'~ met.brewer('Lakota')[1],
+                       family == 'Bufonidae'~met.brewer('Lakota')[6],
+                       family == 'Microhylidae'~met.brewer('Lakota')[3],
+                       family == 'Ranidae'~met.brewer('Lakota')[4])) %>%
+  group_by(family)%>%
+  mutate(shp=c(1,2,3,6,7,8)[1:n()],
+         pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
+  arrange(pltsp)
+```
+
+To investigate thermal sensitivity of anurans using mechanistic niche models (MNMs), we will need to run models at multiple points and then summarize the models at the specific levels of biological organization. 
+
+Ideally this will be at the resolution of the environmental datasets. The NicheMapR team has explored how ordinary kringing can be used to interpolate microclimate data to a physiological parameter (article link here)[https://onlinelibrary-wiley-com.ezproxy.lib.vt.edu/doi/10.1111/jbi.13152]. In 2020, there was a discussion of using rasters to speed processing for large geographic extents (thread here)[https://groups.google.com/g/nichemapr/c/FNzXsigRdmk/m/7z_4-rBaBgAJ]
+
+Below, we run a for loop to run a MNM at a point where each species' critical thermal maximum was determined. This gives us information about the interspecific difference in thermal sensitivity and controls for acclimation (because the acclimation at that point would be incorporated within the measurement of CTmax). This for loop is similar to the one that we then use to run across the entire Southeast United States to approximate intraspecific thermal sensitivity.
+
+The for loop consists of two main parts: the microclimate model (micro_ncep) and then a for loop for different biophysical models (ectotherm). For the one point interspecific comparison, the microclimate model runs at a single point where the CTmax was determined (based on the verbatim locality listed in ATraiU-TaDS). If the microclimate model doesn't converge, it tries a higher integrator error tolerance. This error is usually thrown because of difficulties calculating snow presence and effencts on soil temperatures. Michael Kearny said that he seees pretty reliable results as long as the error tolerance isn't above 10 (google group answer)[https://groups.google.com/g/nichemapr/c/RQWCoW38w08/m/7c3b9xlFAAAJ]. The for loop then finds another for loop that implements different thermoregulatory parameter for each CTmax found at that point and saves summarized output for each point. The intraspecific for loop has a similar structure but is run on the high power computer (to allow for parallelization). First, within the raster we decide, it runs a microclimate model for that grid cell (with error tolerance code included). It then runs a for loop for a unique biophysical model that uses the thermoregulatory trait values for each species found within that grid cell. It saves the same output as the one point interspecific comparison for loop. The code for the intraspecific MNM model output generation can be found in [ file name here ].
+
+# One Point Interspecific Comparison
+
+I georeferenced verbatim localities for CTmax trait values from ATraiU-TaDS using Wikipedia/GeoHack (e.g., (Long Island, NY georeference)[https://geohack.toolforge.org/geohack.php?pagename=Long_Island&params=40.8_N_73.3_W_scale:10000000000000000000_source:dewiki]). Most of these points exist outside the Southeast US, thus why we need to run the models within the SE US even though accounting for acclimation will be difficult. 
+
+```{r map of single points, warning=F, message=F, echo=F, fig.height=2.5, fig.width=4}
+pt_locs<-read.csv('input_data/point_locations.csv') # georeferenced CTmax localities
+traits<-read.csv('input_data/inputed_physio_traits.csv') # traits used throughout our analyses
+usa<-st_as_sf(map('usa','main', fill=T, plot=F))
+
+pt_locs %>% 
+  distinct(species, verbatimLocality, .keep_all = T) %>%
+  st_as_sf(coords=c('longitude','latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
+  group_by(verbatimLocality) %>%
+  summarize(pltspall=paste(unique(pltsp), collapse='\n')) %>%
+  ggplot() +
+  geom_sf(data=usa, aes(geometry=geom)) +
+  geom_sf(color='red', size=2)+
+  geom_text_repel(aes(label = pltspall, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0, size=2.3, max.overlaps=20)+
+  theme_bw()+
+  theme(axis.title=element_blank())
+```
+Below is the code for the one point interspecific comparison. It runs a microclimate model for each of the points above and for all the CTmaxes determined at that point. 
+
+```{r}
+# identifiy points to run
+pt_run<-pt_locs %>% 
+  group_by(species, latitude, longitude) %>% 
+  tally() %>% arrange(desc(n))
+
+# set up starting values / datasheets
+pt.warmtol<-NULL
+ERR <- 1.5
+
+for(i in 1:nrow(pt_run)){ # for each row in the pt_run sheet
+# create a microclimate model 
+  micro <- micro_ncep(loc = c(round(as.numeric(pt_run$longitude[i]),4), 
+                              round(as.numeric(pt_run$latitude[i]),4)),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75, 100), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    # soilgrids=1,
+                    spatial='../ncep_data/',
+                    dem.res=1000, # requested resolution DEM from elevatr in meters
+                    Usrhyt = 0.01, # local height for organism
+					ERR=ERR) # integrator error tolerance for high snow areas
+	# check the microclimate model completed. if not, increase error tolerance				
+	gc()
+      while(min(micro$metout[,1])==0 & ERR <= 3){
+        cat("model crashed, trying a higher error tolerance \n")
+        ERR <- ERR + 0.25
+		# rerun the microclimate with slightly higher error tolerance allowed
+        micro <- micro_ncep(loc = c(round(as.numeric(pt_run$longitude[i]),4), 
+                              round(as.numeric(pt_run$latitude[i]),4)),
+                    dstart = "01/01/2020", dfinish = "31/12/2020",
+                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75, 100), #cm
+                    minshade = 0, maxshade = 90, runshade=1,
+                    # soilgrids=1,
+                    spatial='../ncep_data/',
+                    dem.res=1000, # requested resolution DEM from elevatr in meters
+                    Usrhyt = 0.01, # local height for organism
+					ERR=ERR) # integrator error tolerance for high snow areas
+        gc()
+      }
+	  
+  # get the rest of the trait data for the species at that point
+  spp_traits <- traits %>% filter(species == pt_run[i,]$species) 
+
+# run a biophysical model!
+  for(u in pt_locs[pt_locs$species == pt_run$species[i] & 
+                   pt_locs$longitude == pt_run$longitude[i] & 
+                   pt_locs$latitude == pt_run$latitude[i],"traitValue"]){
+    ecto<-ectotherm(Ww_g=spp_traits["Mass"], 
+                  shape = 4, # shape based on leopard frog
+                  CT_max=as.numeric(u), 
+                  CT_min=spp_traits["CTmin"], 
+                  T_pref=spp_traits["Tpref"],
+                  # when is activity allowed
+                  diurn=spp_traits["diurnal"],
+                  nocturn=spp_traits["nocturnal"],
+                  crepus=spp_traits["crepuscular"],
+                  # can it go into a burrow or climb to cool off
+                  burrow=spp_traits["s.fossorial"],
+                  climb=spp_traits["s.arboreal"],
+                  shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                  maxdepth = 10, #maximum depth of the burrow
+                  T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]),
+                                as.numeric(spp_traits["Tmerge"]))),
+                  T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]),
+                                as.numeric(spp_traits["CTmax"]))),
+                  T_RB_min=spp_traits["Tmerge"],
+                  T_B_min=spp_traits["Tmerge"])
+	  # save the output of the biophysical model
+      pt.warmtol<- bind_rows(pt.warmtol,
+                             ecto$environ %>% as_tibble() %>%
+                               mutate(CTmax=u,
+                                      hot_tsm=as.numeric(u)-TC) %>% 
+                               group_by(DOY) %>% 
+                               mutate(dayrange=max(TC)-min(TC)) %>%
+                               ungroup() %>%
+                               summarize(n_total=n(),
+                                         n_above=sum(hot_tsm < 0),
+                                         when_tsm0=paste0(DOY[which.min(hot_tsm)], 
+                                                          collapse=', '),
+                                         max_TC=max(TC),
+                                         tsm=min(hot_tsm),
+                                         n_forage=sum(ACT == 2),
+                                         avg_dep=mean(DEP),
+                                         n_belowg=sum(DEP < 0),
+                                         max_dayrange=max(dayrange),
+                                         avg_dayrange=mean(dayrange),
+                                         species=unique(pt_locs[i,"species"]),
+                                         CTmax=u,
+                                         lat=as.numeric(pt_run[i, "latitude"]),
+                                         long=as.numeric(pt_run[i, "longitude"]),
+                                         rowid=i, error_tol=ERR)) 
+  }}
+```
+
+The above code creates an output that looks like this: 
+
+```{r}
+# write out the result from above!!!
+str(pt.warmtol)
+#start = 3:16 ; end = 4:40
+unique(pt.warmtol$error_tol)
+```
+d
+Based on the one point interspecific comparison, we can compare interspecific thermal sensitivity by identifying the species with the lowest median warming tolerance. The below graph does that. 
+
+```{r}
+interSp.sum<-pt.warmtol %>%
+  group_by(species) %>%
+  summarize(m=mean(tsm), sd=sd(tsm), n=factor(n(), levels=1:9),
+            ll=m-ifelse(is.na(sd),0,sd), uu=m+ifelse(is.na(sd),0,sd)) 
+interSp.sum %>%
+  mutate(spF=factor(species, levels=rev(interSp.sum$species[order(interSp.sum$m)]))) %>%
+  ggplot()+
+  geom_vline(xintercept=0, linetype='dashed', color='grey70')+
+  geom_errorbarh(aes(y=spF, xmin=ll, xmax=uu), height=0)+
+  geom_point(aes(x=m, y=spF, shape=n))+
+  scale_y_discrete('Species')+
+  scale_x_continuous('Warming Tolerance')+
+  scale_shape_discrete('N\nPoints')+
+  theme_classic()+
+  theme(axis.text.y=element_text(face='italic', size=9),
+        axis.title=element_text(size=9),
+        legend.position = c(.9,.77),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8))
+ggsave('results/sp_pt_rcsgraph.jpg', width=3.5, height=3.5)
+```

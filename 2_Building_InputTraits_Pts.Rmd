@@ -1,17 +1,19 @@
 ---
 title: "Building Input Dataframes for MNMs"
-date: "10/20/2022"
+date: "11/15/2022"
 output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-library(tidyverse); library(knitr); library(ggrepel); library(cowplot)
+library(tidyverse); library(knitr); library(ggrepel); library(cowplot); library(MetBrewer)
 library(Rphylopars); library(ggtree); library(treeplyr); library(phytools)
 library(sf); library(geodata);library(stars)
 library(nlme)
 knitr::opts_chunk$set(echo = FALSE)
 focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
 ```
+
+\tableofcontents
 
 # Trait Imputation Methods
 
@@ -63,6 +65,10 @@ trait_filt <- new_trait_mean %>%
                                  "Meadow Valley Wash between Carp & Elgin, Lincoln County, Nevada",
                                  "Andes of Veneszuela",
                                  "NAD 27: UTM Zone 17: N5127200m, E304000m")), 
+         !grepl('rhode island', verbatimLocality),
+          !grepl('Northeast US', verbatimLocality),
+         !grepl('Massachusetts', verbatimLocality),
+         !grepl('Connecticut', verbatimLocality),
           !grepl("48 N, 123 W", verbatimLocality),
           !grepl("South Dakota", verbatimLocality),
            !grepl("northwest", verbatimLocality),
@@ -73,75 +79,121 @@ trait_filt <- new_trait_mean %>%
            !grepl("Quebec", verbatimLocality),
          !grepl("Ottawa", verbatimLocality),
            !grepl("British Columbia", verbatimLocality))
-trait_restrict <- group_by(species, traitName) %>%
+trait_restrict <- trait_filt %>%  group_by(species, traitName) %>%
   summarize(mean_val=mean(as.numeric(traitValue)), sd_val=sd(as.numeric(traitValue)))
 ```
 
-building base maps
-
 ```{r}
-can<-gadm('can', level=1, tempdir()) %>% st_as_sf()
-usa<-gadm('usa', level=1, tempdir()) %>% st_as_sf() %>% 
-  filter(!(NAME_1 %in% c('Alaska','Hawaii')))
-se<-usa %>% filter(NAME_1 %in% c('Mississippi', 'Georgia', 'Florida', 'South Carolina', 
-                           'North Carolina', 'Virginia', 'Alabama', 'Tennessee')) %>%
+usa<-st_as_sf(map('state', fill=T, plot=F)) %>% st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
+                 fill=T, plot=F)) %>% 
+  st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
 ```
 
-
-```{r}
-left_join(usa, trait_filt %>%
-  mutate(NAME_1=case_when(grepl('Texas', verbatimLocality) ~ 'Texas',
-                      grepl('Missouri', verbatimLocality) ~ 'Missouri',
+```{r, echo=F}
+usa_traits<-left_join(usa, trait_filt %>%
+  mutate(ID=case_when(grepl('Texas', verbatimLocality) ~ 'texas',
+                      grepl('Missouri', verbatimLocality) ~ 'missouri',
                       grepl('Illinois', verbatimLocality) | 
-                        grepl('IL', verbatimLocality) ~ 'Illinois',
+                        grepl('IL', verbatimLocality) ~ 'illinois',
                       grepl('Ohio', verbatimLocality) |
-                        grepl(', OH', verbatimLocality) ~ 'Ohio',
-                      grepl('New Jersey', verbatimLocality) ~ 'New Jersey',
-                      grepl('Kentucky',verbatimLocality) ~ 'Kentucky',
-                      grepl('Michigan', verbatimLocality)~'Michigan', 
+                        grepl(', OH', verbatimLocality) ~ 'ohio',
+                      grepl('New Jersey', verbatimLocality) ~ 'new Jersey',
+                      grepl('Kentucky',verbatimLocality) ~ 'kentucky',
+                      grepl('Michigan', verbatimLocality)~'michigan', 
                       grepl('New York', verbatimLocality) |
-                        grepl('NY', verbatimLocality) ~ 'New York',
-                      grepl("Maine", verbatimLocality) ~ 'Maine',
-                      grepl("Minnesota", verbatimLocality)|
-                        grepl('MN', verbatimLocality) ~'Minnesota',
-                      grepl('Connecticut', verbatimLocality)~'Connecticut',
-                      grepl('Northeast US', verbatimLocality)|
-                        grepl('Massachusetts', verbatimLocality)~'Massachusetts',
-                      grepl('Indiana', verbatimLocality)~'Indiana',
-                      grepl('Pennsylvania', verbatimLocality)~'Pennsylvania',
-                      grepl('Arkansas', verbatimLocality)~'Arkansas',
-                      grepl('Louisiana', verbatimLocality)~'Louisiana',
-                      grepl('Maryland', verbatimLocality)~'Maryland',
-                      grepl('Delaware', verbatimLocality)~'Delaware',
-                      grepl('rhode island', verbatimLocality) ~ 'Rhode Island',
-                      grepl('Kansas', verbatimLocality) ~ 'Kansas',
+                        grepl('NY', verbatimLocality) ~ 'new york',
+                     
+                      grepl('Indiana', verbatimLocality)~'indiana',
+                      grepl('Pennsylvania', verbatimLocality)~'pennsylvania',
+                      grepl('Arkansas', verbatimLocality)~'arkansas',
+                      grepl('Louisiana', verbatimLocality)~'louisiana',
+                      grepl('Maryland', verbatimLocality)~'maryland',
+                      grepl('Delaware', verbatimLocality)~'delaware',
+                      grepl('rhode island', verbatimLocality) ~ 'rhode island',
+                      grepl('Kansas', verbatimLocality) ~ 'kansas',
                       grepl('Oklahoma', verbatimLocality)|
-                        verbatimLocality == 'UTM zone 15; 233905E, 4047104N, NAD 83' ~ 'Oklahoma',
+                        verbatimLocality == 'UTM zone 15; 233905E, 4047104N, NAD 83' ~ 'oklahoma',
                       verbatimLocality %in% c("41 17' N, 83 37' W", "41 17' N, 83 13' W",
-                                              "40 37' N, 83 17' W") ~ 'Ohio',
-                      verbatimLocality == "44 28'45\"N, 87 37'15\" W" ~ 'Wisconsin',
-                      verbatimLocality == "N 0695928 and W 4482919, zone 15 using NAD27 CONUS map datum in UTM" ~ 'Illinois',
+                                              "40 37' N, 83 17' W") ~ 'ohio',
+                      verbatimLocality == "44 28'45\"N, 87 37'15\" W" ~ 'wisconsin',
+                      verbatimLocality == "N 0695928 and W 4482919, zone 15 using NAD27 CONUS map datum in UTM" ~ 'illinois',
          T ~ 'study area')) %>%
-    distinct(traitName, NAME_1) %>%
-    group_by(NAME_1) %>% summarize(n_traits=length(unique(traitName))),
-  by='NAME_1') %>%
-  mutate(n_traits = ifelse(NAME_1 %in% c('South Dakota', 'Nevada', "Maine", "Minnesota"), 0,n_traits)) %>%
+    distinct(traitName, ID) %>%
+    group_by(ID) %>% summarize(n_traits=length(unique(traitName))),
+  by='ID') %>%
+  mutate(n_traits = factor(ifelse(ID %in% c('south dakota', 'nevada', "maine", "minnesota",
+                                            "massachusetts", "connecticut","rhode island"), 
+                           0, n_traits))) 
+usa_traits %>%
   ggplot()+
-  geom_sf(data=can %>%
-            mutate(n_traits=ifelse(NAME_1 %in% c("Ontario","Quebec","British Columbia", "Nova Scotia"), 0, NA)),
-          aes(fill=n_traits))+
   geom_sf(aes(fill=n_traits))+
   geom_sf(data=se %>% st_transform(st_crs(usa)), fill='lightgrey')+
+  scale_fill_manual('N traits\nused', values=c(met.brewer('Benedictus', 9)[c(1, 5:9)]))+
   theme_void()
+ggsave('results/FigS2_traits_removed.jpg', width=6, height=4)
+```
+
+```{r}
+edge_sts<-usa_traits %>% filter(ID %in% c("mississippi", "tennessee", "virginia")) %>% 
+  st_centroid() 
+
+dist.mat<-usa_traits %>% filter(!is.na(n_traits),
+                      !(ID %in% se$ID)) %>%
+  st_distance(edge_sts)
+colnames(dist.mat)<-edge_sts$ID
+rownames(dist.mat)<-usa_traits %>% filter(!is.na(n_traits), !(ID %in% se$ID)) %>% pull(ID)
+dist.mat
+```
+
+```{r}
+rowMeans(dist.mat)[rowMeans(dist.mat)>1000]
+```
+
+```{r}
+edge_sts2<-se %>% st_make_valid() %>% st_union()
+dm2<-usa_traits %>% filter(!is.na(n_traits),
+                      !(ID %in% se$ID)) %>%
+  st_distance(edge_sts2)
+rownames(dm2)<-usa_traits %>% filter(!is.na(n_traits), !(ID %in% se$ID)) %>% pull(ID)
+dm2[order(dm2[,1]),]
 ```
 
 
+```{r compare trait values, fig.width=6.5, fig.height=3, echo=F}
+both_trait_types<-trait_db %>% select(-refIDs) %>%
+  pivot_longer(-species, names_to = "traitName") %>%
+  left_join(trait_restrict, by = c("species", "traitName"))
+both_trait_types %>%
+  filter(!is.na(mean_val))  %>%
+  mutate(trait_dif=value-mean_val) %>%
+  ggplot()+
+  geom_point(aes(y=species, x=trait_dif))+
+  facet_wrap(~traitName, scales='free', ncol=3)+
+  scale_x_continuous('Trait Difference\nEntire Range Trait Value - Within 1000km of the SE Trait Value')+
+  theme_classic()+
+  theme(strip.background=element_blank(),
+        axis.text.y = element_text(face='italic'),
+        axis.text.x=element_text(size=8),
+        axis.title.y=element_blank())
+```
 
+Based on this quick comparison, we can see some unexpected differences between interspecific trait values calculated for the species entire range and interspecific trait values calculated just using trait values measured within a mean of 1000km of the edge our study region. Mean CTmax is higher when calculated when using the entire range, despite the SE US region having hotter summers. Mean CTmin is higher in the SE, likely because of its milder winters. Mass is mostly consistent except for much (~25%) larger L. catesbeianus (American bullfrog). Preferred temperatures are higher when we restrict values to the SE and emergence temperatures are later, both of which might be expected because of hotter temperatures and more resources (thus less need to compete for resources by emerging sooner).   
 
+So when multiple traits are available for our focal species, we only use traits within a mean of 1000km of the edge states of our study region. When only one trait is available for a species and trait, we use that trait. We did not restrict the trait values for non-focal SE species (which are used in the phylogenetic imputation process) because those species might have large ranges and are already likely trait limited.
+
+```{r}
+trait_used<-both_trait_types %>%
+  mutate(trait_value=ifelse(is.na(mean_val), value, round(mean_val,3))) %>%
+  select(species, traitName, trait_value) %>%
+  pivot_wider(names_from=traitName, values_from=trait_value)
+```
 
 ```{r phylogeny, echo = F, fig.height=4.5}
-taxa_table<-trait_db %>% dplyr::select(species) %>%
+taxa_table<-trait_used %>% dplyr::select(species) %>%
   mutate(Tree.name.syn=case_when(species == 'Dryophytes squirellus'~ 'Hyla squirella',
                              species == 'Dryophytes gratiosus'~ 'Hyla gratiosa',
                              species == 'Dryophytes cinereus'~'Hyla cinerea',
@@ -165,7 +217,7 @@ taxa_table$node<-nodeid(tree.pruned, taxa_table$Tree.name)
 ```
 
 ```{r plot the phylo tree, echo=F, warning=F, message=F}
-trait.df<-trait_db %>%
+trait.df<-trait_used %>%
   mutate(category=ifelse(species %in% focal_spp, 'focal', 'SE')) %>%
   right_join(taxa_table, by='species') %>%
             mutate(tree.lab=paste0(substr(Tree.name,1,1), '. ',
@@ -176,18 +228,13 @@ ggtree(trait_tree, aes(color=category, label=tree.lab), size=3)+
   geom_tiplab(as_ylab=T)
 ```
 
-So based on the missing trait data of our focal species, we should either use Rphylopars or BHPMF + phylogeny to impute the missing trait data. I am going to use all the trait data available across the entire Southeast US anuran species group (n = 40 species) to impute the data.
+So based on the missing trait data of our focal species, we should either use Rphylopars or BHPMF + phylogeny to impute the missing trait data. I am going to use all the trait data available across the entire Southeast US anuran species group (n = 37 species) to impute the data using Rphylopars.
 
 ## Use Rphylopars to imput continuous trait data
 
 ```{r trait mat, warning=F, message=F, echo=F}
-trait.mat.m<-trait.df[, c(18, 6:10, 12:14)] %>%
+trait.mat<-trait.df[, c(17, 6:10, 12:14)] %>%
   rename('species'='Tree.name')
-# note to self : incorporate interspecific traits?
-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%
-  filter(lifeStage %in% c('unknown','adult')) %>%
-  select(species, verbatimLocality, traitName, traitValue) %>%
-  pivot_wider(names_from=traitName, values_from=traitValue)
 ```
 We use the following code to impute the traits using the *Rphylopars* package. 
 - estimates phylogenetic and phenotypic variance-covariance matrices 
@@ -216,12 +263,12 @@ kable(data.frame(model=c('lambda','Brownian motion','OU'),
 ```
 
 ```{r}
-summary(p_OU)
+summary(p_lamda)
 ```
 
 ```{r results graph,  fig.height=4, echo=F}
 #results!
-imp_results <- p_OU$anc_recon[1:length(tree.pruned$tip.label),] %>%
+imp_results <- p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
   as_tibble() %>%
   bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
   left_join(trait.mat, by='species')%>%
@@ -240,7 +287,7 @@ imp_results <- p_OU$anc_recon[1:length(tree.pruned$tip.label),] %>%
 imp_results %>%
   ggplot(aes(x=family, y=Yes, color=Imputed))+
   geom_boxplot(color='black', fill=NA, outlier.alpha = 0)+
-  geom_point(position=position_dodge(width=0.5))+
+  geom_point(position=position_dodge(width=0.5), alpha=.5)+
   facet_wrap(~variable, scales='free_y')+
   labs(x='Family',y='Value')+
   scale_color_manual(values=c('forestgreen','goldenrod'))+
@@ -326,7 +373,7 @@ used_traits<-imp_results %>% #imputed thermoregulation traits
          crepuscular = case_when(species == 'Lithobates areolatus' ~ 0, T~crepuscular),
          s.fossorial = as.numeric(s.fossorial),
          s.arboreal = as.numeric(s.arboreal)) 
-write.csv(used_traits, 'input_data/inputed_physio_traits.csv', row.names=F)
+write.csv(used_traits, 'input_data/inputed_physio_traits_11152022.csv', row.names=F)
 ```
 
 ```{r, fig.width=5, fig.height=2, echo=F}
@@ -366,6 +413,9 @@ plot_grid(ggplot(plt.df, aes(x=family, y=Tmerge, label=pltsp)) +
 ggplot(plt.df, aes(x=family, y=Tpref, label=pltsp)) +
   geom_point() + geom_text_repel(size=3)+
   scale_y_continuous('Preferred Temperature, Celcius')+nictp)
+rm(p_BM, p_lamda, p_OU, plt.df, 
+   trait_filt, trait_restrict, trait.df, trait.mat,  trait_used, 
+   usa_traits, usa,edge_sts, edge_sts2) #clean up space 
 ```
 
 # Exploring accounting for Acclimation using data from ATraiU-TaDS
@@ -605,63 +655,68 @@ plot_grid(microtest %>%
 
 # Building points at which to run the MNMs
 
-Now that I have the species pool, I identify points to run the models across a species range. The code chunk below creates a grid across the southeastern US that we will use to get the points we will use as inputs into the microclimate model. 
+Now that I have the species pool, I identify points to run the models across a species range. The code chunk below creates a grid across the southeastern US that we will use to get the points we will use as inputs into the microclimate model. I will populate a grid at the resolution of our microclimate model on the high power computer (not enough memory on my laptop). First, I need to build range estimates to populate this grid. I do this by using the point occurrences from the RCS analysis, removing points outside 100km of the species' IUCN range (when available), adding a 5km buffer, and taking the union of all points to get an area of occupancy for each frog species. 
 
-```{r}
-anura.tax<-read.csv('input_data/inputed_physio_traits.csv')
-focal_spp<-anura.tax %>% pull(species) %>% unique()
-
+```{r build grid, eval=F}
+library(tidyverse); library(sf); library(maps);library(stars)
+# Build Points at which to run MNMs ------------
+# study extent
 se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
                            'north carolina', 'virginia', 'alabama', 'tennessee'), 
                  fill=T, plot=F)) %>%
   st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+# create raster of study extent
+se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster of 1x1 kilometers
+  st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
+  rowid_to_column() # add an id column
+
+se_grid<-NULL
+focal_spp<-read.csv('AnuranMNMs/inputed_physio_traits.csv') %>% pull(species)
+for(s in focal_spp){
+  spp_aoo<-read_sf('RCS_resub/L48_1km', layer=s) %>%
+    st_buffer(4) 
+  spp_grid<-st_join(se_r, spp_aoo) %>% filter(!is.na(FID)) %>%
+    mutate(species=s)
+  se_grid <- bind_rows(se_grid, spp_grid)
+  print(s)
+}
+
+# identify all species in a single grid
+se_grid_spp <- se_grid %>% as_tibble() %>% # avoiding summarize on sf
+  group_by(rowid) %>% 
+  summarize(spp_all=paste(unique(species), collapse=', '),
+            n_spp=n())
+nrow(se_grid_spp)
+# get the centroid of each grid cell as a point
+pts<-se_r %>% st_centroid() %>%
+  left_join(se_grid_spp, by='rowid') %>%
+  filter(!is.na(n_spp))
+
+se_r %>%
+  left_join(se_grid_spp, by='rowid') %>%
+  filter(!is.na(n_spp)) %>%
+  ggplot()+
+  geom_sf(data=se)+
+  geom_sf(aes(fill=n_spp, color=n_spp))+
+  scale_color_viridis_c('N\nspecies', aesthetics=c('fill','color'))+
+  theme_bw()
+# convert the grid of points to a dataframe for NicheMapR
+# locational input into the microclimate function below
+se_pts_df <- pts %>%
+  st_transform(st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_coordinates() %>% 
+  bind_cols(rowid = pts$rowid, spp_all=pts$spp_all)
+write.csv(se_pts_df, paste0('points_ran_', format(Sys.Date()), '.csv'), row.names = F)
 ```
 
 
-I will populate a grid at the resolution of our microclimate model on the high power computer (not enough memory on my laptop). First, I need to build range estimates to populate this grid. I do this by using the point occurrences from the RCS analysis, removing points outside 100km of the species' IUCN range (when available), adding a 5km buffer, and taking the union of all points to get an area of occupancy for each frog species. 
-
-```{r}
+```{r, fig.height=2.7, fig.width=6.5}
 # bring in the IUCN range shapefile to filter point occurrences
 iucn_all<-read_sf('../ANURA') %>% 
   filter(binomial %in% focal_spp, # only keep species we are interested in
          !grepl('Extinct',legend)) %>% # only keep ranges that are extant or introduced
-  group_by(binomial) %>% summarize() %>%
-  st_buffer()
-# first we pull in each species' occurrence points from GBIF & HerpMapper
-anuran_pts<-NULL
-for(s in focal_spp){
-  anuran_pts<-bind_rows(anuran_pts,
-                        read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
-                        # only keep this information about the occurrence point
-                          dplyr::select(source, species, Longitude, Latitude,
-                                        coordinateUncertaintyInMeters, coordinatePrecision, elevation, 
-                                        day, month, year))
-}
-```
-
-
-```{r}
-aoos<-anuran_pts %>%  
-  st_as_sf(coords=c('Longitude','Latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-  st_join(se %>% st_make_valid() %>% st_transform("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-  filter(!is.na(ID)) %>%
-  group_by(species) %>%
-  summarize(n=n(),
-            medyear=median(year, na.rm=T),
-            year25=quantile(year, .25, na.rm=T),
-            year75=quantile(year,.75, na.rm=T)) %>%
-  st_buffer(5) 
-aoos %>%
-  bind_cols(area=st_area(.))
-  
-```
-
-```{r, fig.height=2.7, fig.width=6.5}
-iucn_all<-read_sf('../ANURA') %>% 
-  filter(binomial %in% focal_spp,
-         !grepl('Extinct',legend)) %>%
-  group_by(binomial) %>% summarize() 
+  group_by(binomial) %>% summarize()
 latlist_iucn<-NULL
 for(i in iucn_all$binomial){
   latlist_iucn<-bind_rows(latlist_iucn,
@@ -687,6 +742,17 @@ se_dl <- se %>%
   st_rasterize(dx=.5, dy=.5) %>% #turn into a raster of 1x1 kilometers
   st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
                        rowid_to_column()
+
+# then we pull in each species' occurrence points from GBIF & HerpMapper
+anuran_pts<-NULL
+for(s in focal_spp){
+  anuran_pts<-bind_rows(anuran_pts,
+                        read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
+                        # only keep this information about the occurrence point
+                          dplyr::select(source, species, Longitude, Latitude,
+                                        coordinateUncertaintyInMeters, coordinatePrecision, elevation, 
+                                        day, month, year))
+}
 pt1<-anuran_pts %>%  
   st_as_sf(coords=c('Longitude','Latitude'), 
            crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
@@ -702,7 +768,7 @@ latlist_iucn %>%
             mutate(dist='IUCN range') %>%
             bind_rows(latlist_occs %>% 
                         mutate(dist='occurrences')) %>%
-  left_join(anura.tax %>% distinct(family, species), by='species') %>%
+  left_join(rcs %>% distinct(family, species), by='species') %>%
    mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
   ggplot()+
   geom_density(aes(x=Y, fill=dist, color=dist), alpha=0.8)+
@@ -725,13 +791,14 @@ latlist_iucn %>%
                         strip.background = element_blank())
   #guides(fill=guide_legend(nrow=3, size=.5, alpha=1))
 ggsave('results/FigS3_propdist_lat.jpg', height=4.5, width=6.5)
-rm(iucn_all, iucnrng, latlist_iucn, latlist_occs, na_r)
+rm(iucn_all, iucnrng, latlist_occs, na_r)
 ```
-```{r}
-latlist %>%
-  group_by(species) %>% summarize(percent.dist.below.max.lat=round(ecdf(y)(max.lat)*100,2)) %>%
-  arrange(percent.dist.below.max.lat)
-
+```{r percent dist in SE, echo=F}
+kable(latlist_iucn %>%
+  group_by(species) %>% summarize(percent.dist.below.max.lat=round(ecdf(Y)(max.lat)*100,2)) %>%
+  arrange(percent.dist.below.max.lat),
+  caption='Percent of species IUCN range, gridded at a .5 decimal degree resolution, below the maximum latitude of our study region',
+  col.names = c('species','% below 34.46 N'))
 ```  
 
 

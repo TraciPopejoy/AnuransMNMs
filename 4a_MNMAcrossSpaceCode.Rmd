@@ -1,0 +1,261 @@
+---
+title: "HPC Code for Mechanistic Niche Models Across Space"
+author: "TP DuBose"
+date: "11/22/2022"
+output: pdf_document
+---
+
+Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code and save myself time.
+
+```{r anuran parallel script, eval=F}
+# bash script to programatically run Mechanistic Niche models ----
+# by Traci DuBose, last edited 11/22/2022
+
+#interact -A usgs_rcs -t 2:00:00 -p normal_q -N 1 -c 2 # code to start an interactive session
+#module load containers/singularity 
+#singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript AnuranMNMParallel.r
+
+# problem child models
+#221010 22726 24648 293372 33108 347468 424278 532485 6040 670309 787307 897533 963679
+
+# set up the libraries
+.libPaths(.libPaths()[3:1])
+#library(devtools)
+#devtools::install_github('mrke/NicheMapR')
+#devtools::install_github('ilyamaclean/microclima')
+library(tidyverse); library(maps);  library(sf); library(parallel); library(NicheMapR); library(hoardr); library(stars)
+
+# INPUTS ------------
+# paths
+PATH <- "./" #arc
+PATH_out <- paste0(PATH, "results/") # where to save the output
+# traits used to parameterize the ectotherm function
+traits <- read.csv(paste0(PATH, "inputed_traits.csv")) %>%
+  mutate(across(c('s.fossorial', 's.arboreal', 'nocturnal','diurnal','crepuscular'),
+                as.numeric))
+focal_spp<-traits %>% pull(species) %>% unique() # focal species to run models for
+
+# completed points
+pts_done <- c(gsub('*_bodytemps.csv','', list.files(PATH_out, 'body')),
+                read.csv('models_run2022-11-21.csv') %>% pull(rowid))
+
+# points at which to run the microclimate model
+pts_df<-read.csv(paste0(PATH, "points_to_run.csv")) %>%
+            filter(!(rowid %in% pts_done))
+# model parameters
+start_date="01/01/2012"
+end_date="31/12/2020"
+cat('\ndata loaded\n')
+# FUNCTION WHICH WE USE TO PARALLALIZE CODE ----------
+# it should run the microclimate model and then an ectotherm model for each species found in that grid
+anuranMNMs<-function(rw, write.micro.out=F){
+  pt<-pts_df[pts_df$rowid==rw,]
+  cat(paste0(rw, ' row number \n', round(pt[1,1],3), '  ',round(pt[1,2], 3),'\n'))
+  ecto_out <- NULL
+  ERR <- 1.5
+  micro <- micro_ncep(loc = c(as.numeric(pt[1,1]),as.numeric(pt[1,2])),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
+                    # soilgrids=1,
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR,
+                     run.gads=2)
+cat(paste0(min(micro$metout[,1]), ' min micro for ', rw, ' \n'))
+  gc()
+  while(min(micro$metout[,1])==0 & ERR <= 6){
+        cat("model crashed, trying a higher error tolerance \n")
+        ERR <- ERR + 0.25
+
+               # rerun the microclimate with slightly higher error tolerance allowed
+        micro <- micro_ncep(loc = c(as.numeric(pt[1,1]),as.numeric(pt[1,2])),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
+                    #soilgrids=1,
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR,
+                     run.gads=2)
+        gc()
+      }
+
+if(min(micro$metout[,1])==0){
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           notes='broken model',
+           err=ERR)
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+        }else{
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           tRainfall=sum(micro$RAINFALL),
+           evel=micro$elev,
+           slope=micro$SLOPE,
+           aspect=micro$ASPECT,
+           err=ERR) %>%
+  mutate(across(-c(rowid, lat, long), ~round(.x, 3)))
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+
+if(write.micro.out==T){
+micro_unshad<-left_join(micro$metout %>% as_tibble() %>%
+                          bind_cols(DATE=date((micro$dates))) %>%
+  group_by(DATE) %>%
+  summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
+                   list(mean=mean, max=max, min=min)),
+            across(c(RHLOC, RH), list(mean=mean, min=min)),
+            across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
+    mutate(across(-DATE, ~round(.x, 3)))%>%
+    bind_cols(RAINFALL=micro$RAINFALL),
+  micro$soil %>% as_tibble() %>%
+    bind_cols(DATE=date((micro$dates))) %>%
+       group_by(DATE) %>%
+    summarize(across(-TIME, mean)) %>%
+    mutate(across(-DATE,~round(.x, 2))),
+  by='DATE')
+
+micro_shad<-left_join(micro$shadmet %>% as_tibble() %>%
+                        bind_cols(DATE=date(micro$dates)) %>%
+                        group_by(DATE) %>%
+            summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
+                             list(mean=mean, max=max, min=min)),
+                      across(c(RHLOC, RH), list(mean=mean, min=min)),
+                      across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
+            mutate(across(-DATE, ~round(.x, 3))),
+          micro$shadsoil %>% as_tibble() %>%
+            bind_cols(DATE=date(micro$dates)) %>%
+            group_by(DATE) %>%
+            summarize(across(-TIME, mean)) %>%
+            mutate(across(-DATE,~round(.x, 2))),
+          by='DATE')
+
+write.csv(micro_unshad, paste0(PATH_out, '_', rw,'_microunshades.csv'), row.names=F)
+write.csv(micro_shad, paste0(PATH_out, '_', rw,'_microshades.csv'), row.names=F)}
+gc()
+
+  for(spp in focal_spp){
+    if(grepl(spp, pt$spp_all)){
+      spp_traits <- traits %>% filter(species == spp)
+
+      ecto<-ectotherm(Ww_g=spp_traits["Mass"],
+                      shape = 4, # shape based on leopard frog
+                      CT_max=spp_traits["CTmax"],
+                      CT_min=spp_traits["CTmin"],
+                      T_pref=spp_traits["Tpref"],
+                      # when is activity allowed
+                      diurn=spp_traits["diurnal"],
+                      nocturn=spp_traits["nocturnal"],
+                      crepus=spp_traits["crepuscular"],
+                      # can it go into a burrow or climb to cool off
+                      burrow=spp_traits["s.fossorial"],
+                      climb=spp_traits["s.arboreal"],
+                      shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                      maxdepth = 10, #maximum depth of the burrow
+                      T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]), as.numeric(spp_traits["Tmerge"]))),
+                      T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"]))),
+                      T_RB_min=spp_traits["Tmerge"],
+                      T_B_min=spp_traits["Tmerge"],
+                      # microclimate port from parent environment
+                      nyears= micro$nyears,
+                      minshades = micro$minshade,
+                      maxshades = micro$maxshade,
+                      alpha_sub = (1 - micro$REFL),
+                      DEP = micro$DEP, KS = micro$KS, b = micro$BB,
+                      PE = micro$PE, metout = micro$metout, shadmet = micro$shadmet,
+                      soil = micro$soil, shadsoil = micro$shadsoil, soilmoist = micro$soilmoist,
+                      shadmoist = micro$shadmoist, humid = micro$humid, shadhumid = micro$shadhumid,
+                      soilpot = micro$soilpot, shadpot = micro$shadpot, tcond = micro$tcond,
+                      shadtcond = micro$shadtcond, rainfall = micro$RAINFALL,
+                                           preshr = rep(101325 * ((1 -
+                                                (0.0065 * as.numeric(micro$elev)/288))^(1/0.190284)),
+                                   nrow(micro$metout)), elev = as.numeric(micro$elev),
+                      longitude = as.numeric(micro$longlat[1]),
+                      latitude = as.numeric(micro$longlat[2]))
+
+bodytemps<-ecto$environ %>% as_tibble() %>%
+  mutate(WT=as.numeric(spp_traits["CTmax"])-TC) %>%
+  group_by(YEAR, DOY) %>%
+  summarize(activity0=sum(ACT == 0),
+         activity1=sum(ACT == 1),
+         activity2=sum(ACT == 2),
+         shadeMean=round(mean(SHADE),2),
+         across(c(WT,TC,TA,TSUB, TSKY, DEP), list(mean=mean, max=max, min=min)),
+         nHoursAboveCTmax=sum(WT < 0),
+         species=spp,
+         rowid=rw) %>%
+         mutate(across(c(ends_with('mean'), ends_with('min'), ends_with('max')), ~round(.x, 3)),
+         .groups='drop') %>%
+  group_by(species, rowid) %>%
+  summarize(nDays=sum(nHoursAboveCTmax != 0),
+        meannH=mean(nHoursAboveCTmax),
+        WT_ptmin=min(WT_min),
+        WT_min25=quantile(WT_min, .25),
+        WT_25=quantile(WT_mean, .25),
+        WT_75=quantile(WT_mean, .75),
+        WT_ptmean=mean(WT_mean),
+        nhrF=sum(activity2), .groups='drop')
+ecto_out<-bind_rows(ecto_out, bodytemps)
+}
+}
+#write.csv(ecto_out, paste0(PATH_out, rw, "_bodytemps.csv"), row.names=F)
+}
+
+results<-mclapply(pts_df[sample(1:nrow(pts_df),1000),]$rowid, anuranMNMs, mc.cores = 40) # outputs list from each rep of function I think
+save_this <- do.call('rbind', results)
+# save the outputs of this code
+write.table(save_this, file = paste0("models_run", Sys.Date(), ".csv"),
+            sep = ",", append = TRUE, row.names = FALSE)
+```
+
+I automate this code with the following SLURM job submission script. 
+
+```{r slurm script, eval=F}
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks=40
+#SBATCH --mem-per-cpu=2000
+#SBATCH -t 30:00
+#SBATCH -J avoid_mem_error
+#SBATCH -p normal_q
+#SBATCH --account=
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=
+
+# info: -N=nodes
+#ntasks=cores
+#mem-per-cpu=memory requested (note, it's multiplied by ntasks, so if you ask for 2 cores, and 80 mem-per-cpu, you'll get 160 G)
+#-t = time requested
+#-J = job name
+#-p = partitiion
+#you don't need to mail requests if you don't want to get notifications about the job running, you could just delete
+
+cd /fastscratch/tracidubose/AnuranMNMs #project folder
+
+# make sure the correct files are used
+#cp /home/tracidubose/AnuranMNMs/inputed_physio_traits_11152022.csv inputed_traits.csv
+#cp /home/tracidubose/AnuranMNMs/points_ran_2022-11-17.csv points_to_run.csv
+
+module load containers/singularity # this line is necessary
+echo "Modules loaded:" #these lines are just extra until L34
+module list
+
+echo " "
+echo "============================="
+echo "Running from:"
+pwd
+echo " "
+echo "============================="
+
+
+echo "Running predictor setup step..."
+echo "============================="
+singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript AnuranMNMParallel.r
+echo "============================="
+echo " "
+```
+
