@@ -139,15 +139,15 @@ After entering all the references, I add a unique ID for each reference in the c
 
 ```{r, eval=F}
 #bring the reference data in
-refs<-read.csv('../ATraiU2_reference_list_2022JULY.csv') %>% 
+refs<-read.csv('../ATraiU2_reference_list_2022SEPT.csv') %>% 
   group_by(citation) %>% 
   mutate(group_id=cur_group_id()) %>%
   rename(refID=group_id) %>%
   ungroup()
-write.csv(refs, '../ATraiU2_reference_list_2022JULY.csv', row.names = F)
+write.csv(refs, '../ATraiU2_reference_list_2022SEPT.csv', row.names = F)
 ```
 ```{r print refs, echo=F}
-refs<-read.csv('../ATraiU2_reference_list_2022JULY.csv')
+refs<-read.csv('../ATraiU2_reference_list_2022SEPT.csv')
 kable(refs %>% slice_sample(n=4))
 ```
 
@@ -174,6 +174,7 @@ trait_db_raw<-all_trait_shts %>%
                              'unkown'='unknown', 'tapdole'='tadpole')) %>%
   select(dataScientificName, species, Trait, everything()) # reorders columns 
 write_csv(trait_db_raw, '../intermediate_results/combined_trait_data.csv')
+#trait_db_raw<-read.csv('../intermediate_results/combined_trait_data.csv')
 ```
 
 This also gives me a chance to geolocate species whose identity might have changed since publication (i.e., Acris and Psuedacris).
@@ -211,20 +212,24 @@ In the following tables, I often change column names to match ecological trait s
 
 ```{r}
 trait_long<-trait_db_raw %>%
-  rename(traitSource=`Source file name`) %>%
+  rename(traitSource=Source.file.name) %>%
+  # fixing spelling errors in references to consolidate to one traitSource
+  mutate(traitSource=case_when(traitSource=="Dupre and Petranka 1985" ~ "DuprePetranka1985_Tpref",
+                               traitSource=="Fitch1956" ~ "Fitch1956_temperature",
+                               T ~ traitSource)) %>%
   left_join(refs, by='traitSource') %>% 
   # remove columns that are superfluous for larger tables
   select(-dataScientificName, 
-         -`Search Terms Used`, -DOI, -page, -Season,
+         -`Search.Terms.Used`, -DOI, -page, -Season,
          -doi, -citation, -journal, -issue, -year,
-         -ends_with('author'), -`Original Source`) %>%
+         -ends_with('author'), -`Original.Source`) %>%
   # rename columns to match ecological trait standards when possible
   rename(traitName = Trait, traitValue = Value, traitUnit = Units,
-         lifeStage=`Life Stage`, sex=Sex, verbatimLocality=Location,
+         lifeStage=`Life.Stage`, sex=Sex, verbatimLocality=Location,
          # these just clarify & match style of above standards
-         traitVariation=`Variation of Value`,
-         traitVariationType = `Measure of Variation`,
-         traitEvidenceCategory=`Strength of Evidence`,
+         traitVariation=`Variation.of.Value`,
+         traitVariationType = `Measure.of.Variation`,
+         traitEvidenceCategory=`Strength.of.Evidence`,
          traitAcclimation=Acclimation) %>%
   ungroup() %>% 
   filter(!is.na(refID), # removing traits from websites

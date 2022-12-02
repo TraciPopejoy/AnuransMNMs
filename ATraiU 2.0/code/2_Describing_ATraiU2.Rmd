@@ -13,11 +13,12 @@ library(maps);library(sf)
 The purpose of this code is to describe the physiological trait database for the manuscript results. We start by bringing in the necessary trait table and references. We also identify our entire focal species list.
 
 ```{r}
-trait_long<-read_csv('../ATraiU2_full_2022SEPT1.csv', show_col_types = F) %>%
+trait_long<-read_csv('../ATraiU2_full_2022SEPT.csv', show_col_types = F) %>%
   distinct(traitName, species, refID, traitValue, .keep_all=T) %>%
   filter(traitName != 'Tforage_optim')
 refs <- read_csv('../ATraiU2_reference_list_2022SEPT.csv', show_col_types = F) 
-foc_taxa<-read.csv('../../focal_taxa.csv') %>% pull(species)
+foc_taxa<-c(trait_long %>% pull(species) %>% unique(), 
+            "Pseudacris brimleyi", "Pseudacris nigrita", "Pseudacris ocularis")
 ```
 
 Our focal taxa are `r foc_taxa`. 
