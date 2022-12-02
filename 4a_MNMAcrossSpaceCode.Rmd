@@ -7,6 +7,20 @@ output: pdf_document
 
 Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code and save myself time.
 
+missing bt 261663 
+ missing bt 285860 
+ missing bt 309511 
+ missing bt 451033 
+ missing bt 516731 
+ missing bt 788657 
+ missing bt 811048 
+ missing bt 818211 
+ missing bt 835690 
+ missing bt 840889 
+ missing bt 867998 
+ missing bt 872008 
+ missing bt 891954
+
 ```{r anuran parallel script, eval=F}
 # bash script to programatically run Mechanistic Niche models ----
 # by Traci DuBose, last edited 11/22/2022
@@ -259,3 +273,4 @@ echo "============================="
 echo " "
 ```
 
+?write.table
