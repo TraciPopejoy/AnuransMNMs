@@ -340,7 +340,7 @@ trait_long %>%
          z_score=(mean(tV)-tV)/sd(tV)) %>%
   select(species, traitName, traitValue, tV, z_score, traitSource) %>%
   filter(abs(z_score) > 2.49) %>%
-  mutate(outlier = 'trait'),
+  mutate(outlier = 'trait') %>% ungroup(),
 # at the family level
 trait_long %>%
   filter(traitName != 'Activity', traitValue !='overwinters') %>%
@@ -360,7 +360,7 @@ trait_long %>%
   filter(abs(z_score) > 2.49) %>% ungroup() %>%
   mutate(outlier = 'genus'),
 # at the species level
-trait_long %>%
+trait_long %>% ungroup() %>%
   filter(traitName != 'Activity', traitValue !='overwinters') %>%
   group_by(traitName, species) %>%
   mutate(tV=as.numeric(traitValue),
@@ -396,7 +396,32 @@ trait_long %>%
                                        traitValue != 'overwinters' ~ 'C', 
                          is.na(traitUnit) & traitName == 'Mass' ~ 'g', 
                          T ~ traitUnit)) %>%
+  # add in the ITIS TSNs
+  mutate(itisTSN=case_when(species == "Lithobates okaloosae" ~ 775103, species == "Lithobates sevosus" ~ 775113,
+                           species == "Lithobates sylvaticus" ~ 775117, species == "Lithobates kauffeldi" ~ 1100485,
+                           species == "Lithobates heckscheri" ~ 775092, species == "Lithobates capito" ~ 775083, 
+                           species == "Lithobates virgatipes" ~ 775123, species == "Lithobates grylio" ~ 775091, 
+                           species == "Lithobates areolatus" ~ 775078, species == "Lithobates palustris" ~ 775107,
+                           species == "Lithobates sphenocephalus" ~ 775116, 
+                           species == "Lithobates clamitans" ~ 775087, species == "Lithobates catesbeianus" ~775084,
+                           species == "Pseudacris ornata" ~ 173531, species == "Pseudacris kalmi" ~ 774547,
+                           species == "Pseudacris brimleyi" ~ 173524, species == "Pseudacris nigrita" ~ 173530, 
+                           species == "Pseudacris fouquettei" ~ 774545, species == "Pseudacris ocularis" ~ 1105233, 
+                           species == "Pseudacris brachyphona" ~ 173528, species == "Pseudacris feriarum" ~ 207307, 
+                           species == "Pseudacris crucifer" ~ 207303, species == "Acris gryllus" ~ 173518, 
+                           species == "Acris crepitans" ~ 173520, species == "Acris blanchardi" ~ 774220,
+                           species == "Dryophytes avivoca" ~ 1098486, species == "Dryophytes femoralis" ~ 1095454,
+                           species == "Dryophytes andersonii"~ 1098471, species == "Dryophytes gratiosus" ~ 1098493, 
+                           species == "Dryophytes squirellus" ~ 1098561, 
+                           species == "Dryophytes chrysoscelis" ~ 1098527,
+                           species == "Dryophytes cinereus" ~ 1095381, species == "Dryophytes versicolor" ~ 1095495,
+                           species == "Anaxyrus quercicus" ~ 773528, species == "Anaxyrus terrestris" ~ 773531, 
+                           species == "Anaxyrus fowleri" ~ 773520, species == "Anaxyrus americanus" ~ 773511, 
+                           species == "Incilius nebulifer" ~ 773583, species == "Scaphiopus holbrookii" ~ 173426, 
+                           species == "Gastrophryne carolinensis" ~ 173467)) %>%
+  #filter(is.na(itisTSN))
   #filter(traitName == 'CTmax', species == 'Gastrophryne carolinensis')
   #filter(is.na(traitUnit), traitName != 'Activity') 
   write_csv('../ATraiU2_full_2022SEPT.csv')
 ```
+
