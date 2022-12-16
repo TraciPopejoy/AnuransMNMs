@@ -7,7 +7,7 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
-library(ggrepel); library(cowplot)
+library(ggrepel); library(cowplot); library(ggspatial)
 library(NicheMapR)
 se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
                            'north carolina', 'virginia', 'alabama', 'tennessee'), 
@@ -26,6 +26,7 @@ sppal<-read.csv('input_data/inputed_physio_traits_11152022.csv') %>%
   mutate(shp=c(1,2,3,6,7,8)[1:n()],
          pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
   arrange(pltsp)
+tmplab<-function(x){paste0(x, '°C')}
 ```
 
 To investigate thermal sensitivity of anurans using mechanistic niche models (MNMs), we will need to run models at multiple points and then summarize the models at the specific levels of biological organization. 
@@ -44,7 +45,8 @@ I georeferenced verbatim localities for CTmax trait values from ATraiU-TaDS usin
 pt_locs<-read.csv('input_data/point_locations.csv') # georeferenced CTmax localities
 traits<-read.csv('input_data/inputed_physio_traits.csv') # traits used throughout our analyses
 usa<-st_as_sf(map('usa','main', fill=T, plot=F))
-
+can<-st_as_sf(map('world','canada', fill=T, plot=F)) %>% st_transform(st_crs(usa))
+mex<-st_as_sf(map('world','mexico', fill=T, plot=F)) %>% st_transform(st_crs(usa))
 pt_locs %>% 
   distinct(species, verbatimLocality, .keep_all = T) %>%
   st_as_sf(coords=c('longitude','latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
@@ -52,141 +54,278 @@ pt_locs %>%
   group_by(verbatimLocality) %>%
   summarize(pltspall=paste(unique(pltsp), collapse='\n')) %>%
   ggplot() +
+  geom_sf(data=mex, aes(geometry=geom)) +
+  geom_sf(data=can, aes(geometry=geom)) +
   geom_sf(data=usa, aes(geometry=geom)) +
+  geom_sf(data=se, fill='lightgrey')+
+   geom_label_repel(aes(label = pltspall, geometry = geometry),
+    stat = "sf_coordinates", size=1.9, fontface='italic',
+    min.segment.length = 0, label.r=.1, label.size=.01, max.overlaps=20)+
   geom_sf(color='red', size=2)+
-  geom_text_repel(aes(label = pltspall, geometry = geometry),
-    stat = "sf_coordinates",
-    min.segment.length = 0, size=2.3, max.overlaps=20)+
   theme_bw()+
-  theme(axis.title=element_blank())
+  theme(axis.title=element_blank())+
+  annotation_north_arrow()+
+  coord_sf(ylim=c(25,52), xlim=c(-125, -65))
+ggsave('results/FigS1_interspecific_trait_location.jpg', width=6.5, height=4)
 ```
+
+
 Below is the code for the one point interspecific comparison. It runs a microclimate model for each of the points above and for all the CTmaxes determined at that point. 
 
-```{r}
-# identifiy points to run
-pt_run<-pt_locs %>% 
-  group_by(species, latitude, longitude) %>% 
-  tally() %>% arrange(desc(n))
+```{r hpc one point, eval=F}
+# bash script to programatically run Mechanistic Niche models ----
+# by Traci DuBose, last edited 11/22/2022
 
-# set up starting values / datasheets
-pt.warmtol<-NULL
-ERR <- 1.5
+# set up the libraries
+.libPaths(.libPaths()[3:1])
+#library(devtools)
+#devtools::install_github('mrke/NicheMapR')
+#devtools::install_github('ilyamaclean/microclima')
+library(tidyverse); library(maps);  library(sf); library(parallel); library(hoardr); library(stars); library(NicheMapR)
 
-for(i in 1:nrow(pt_run)){ # for each row in the pt_run sheet
-# create a microclimate model 
-  micro <- micro_ncep(loc = c(round(as.numeric(pt_run$longitude[i]),4), 
-                              round(as.numeric(pt_run$latitude[i]),4)),
-                    dstart = "01/01/2020", dfinish = "31/12/2020",
-                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75, 100), #cm
-                    minshade = 0, maxshade = 90, runshade=1,
+# DATA INPUTS ------------
+coress<-5
+
+# paths
+PATH <- "./" #arc
+PATH_out <- paste0(PATH, "OnePtResults/") # where to save the output
+# traits used to parameterize the ectotherm function
+traits <- read.csv(paste0(PATH, "inputed_traits.csv")) %>%
+  mutate(across(c('s.fossorial', 's.arboreal', 'nocturnal','diurnal','crepuscular'),
+                as.numeric))
+focal_spp<-traits %>% pull(species) %>% unique() # focal species to run models for
+
+# intraspecific CTmax traits
+pt_loc<-read.csv(paste0(PATH, "point_locations_1pt.csv"))
+
+# points at which to run the microclimate model
+pts_df<-pt_loc %>%
+  group_by(species, latitude, longitude) %>%
+   tally() %>% arrange(desc(n))
+
+# model parameters
+start_date="01/01/2012"
+end_date="31/12/2020"
+
+cat('\ndata loaded\n')
+
+# FUNCTION WHICH WE USE TO PARALLALIZE CODE ----------
+# it should run the microclimate model and then an ectotherm model for each species found in that grid
+anuranMNMs<-function(rw, write.micro.out=F){
+  pt<-pts_df[rw,]
+  cat(paste0(rw, ' row number \n', round(pt[1,3],3), '  ',round(pt[1,2], 3),'\n'))
+
+  ecto_out <- NULL
+  ERR <- 1.5
+  micro <- micro_ncep(loc = c(as.numeric(pt[1,3])-0.00001,as.numeric(pt[1,2])+0.00001),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
                     # soilgrids=1,
-                    spatial='../ncep_data/',
-                    dem.res=1000, # requested resolution DEM from elevatr in meters
-                    Usrhyt = 0.01, # local height for organism
-					ERR=ERR) # integrator error tolerance for high snow areas
-	# check the microclimate model completed. if not, increase error tolerance				
-	gc()
-      while(min(micro$metout[,1])==0 & ERR <= 3){
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR,
+                     run.gads=2)
+  gc()
+  while(min(micro$metout[,1])==0 & ERR <= 6){
         cat("model crashed, trying a higher error tolerance \n")
-        ERR <- ERR + 0.25
-		# rerun the microclimate with slightly higher error tolerance allowed
-        micro <- micro_ncep(loc = c(round(as.numeric(pt_run$longitude[i]),4), 
-                              round(as.numeric(pt_run$latitude[i]),4)),
-                    dstart = "01/01/2020", dfinish = "31/12/2020",
-                    DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75, 100), #cm
-                    minshade = 0, maxshade = 90, runshade=1,
-                    # soilgrids=1,
-                    spatial='../ncep_data/',
-                    dem.res=1000, # requested resolution DEM from elevatr in meters
-                    Usrhyt = 0.01, # local height for organism
-					ERR=ERR) # integrator error tolerance for high snow areas
+        ERR <- ERR + 0.5
+        # rerun the microclimate with slightly higher error tolerance allowed
+        micro <- micro_ncep(loc = c(as.numeric(pt[1,3])-0.00001,as.numeric(pt[1,2])+0.00001),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
+                    #soilgrids=1,
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR,
+                     run.gads=2)
         gc()
+cat(paste('row',rw,'tried error ', ERR, 'and it worked ==', min(micro$metout[,1])!=0, '\n'))
       }
-	  
-  # get the rest of the trait data for the species at that point
-  spp_traits <- traits %>% filter(species == pt_run[i,]$species) 
+if(min(micro$metout[,1])==0){
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           notes='broken model',
+           err=ERR)
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+        }else{
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           tRainfall=sum(micro$RAINFALL),
+           aRainfall=sum(micro$RAINFALL)/(length(micro$dates2)/365),
+           evel=micro$elev,
+           slope=micro$SLOPE,
+                      aspect=micro$ASPECT,
+           err=ERR) %>%
+mutate(across(-c(rowid, lat, long), ~round(.x, 3)))
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+bind_cols(ppt=micro$RAINFALL, dat=micro$dates2) %>% mutate(year=substr(dat,1,4)) %>%
+        group_by(year) %>%
+        summarize(mppt=mean(ppt), sdppt=sd(ppt), tppt=sum(ppt), .groups='drop') %>%
+left_join(micro$metout %>%
+             bind_cols(dat=micro$dates) %>%
+             mutate(year=substr(dat, 1,4)) %>%
+             group_by(year) %>% summarize(across(c(TALOC, TAREF), list(mean=mean, sd=sd, min=min, max=max)), .groups='drop'),
+          by='year') %>%
+mutate(across(-c(year), ~round(.x, 2)), rowid=rw) %>%
+write.csv(paste0(PATH_out, rw, '_ppt_dat.csv'), row.names=F)
+gc()}
+  # ECTOTHERM MODEL STARTS -------
+# get the rest of the trait data for the species at that point
+spp_traits <- traits %>% filter(species == as.character(pt[1,1]))
+cat(paste('ectotherm model for', pt[1,1], '\n'))
 
-# run a biophysical model!
-  for(u in pt_locs[pt_locs$species == pt_run$species[i] & 
-                   pt_locs$longitude == pt_run$longitude[i] & 
-                   pt_locs$latitude == pt_run$latitude[i],"traitValue"]){
-    ecto<-ectotherm(Ww_g=spp_traits["Mass"], 
-                  shape = 4, # shape based on leopard frog
-                  CT_max=as.numeric(u), 
-                  CT_min=spp_traits["CTmin"], 
-                  T_pref=spp_traits["Tpref"],
-                  # when is activity allowed
-                  diurn=spp_traits["diurnal"],
-                  nocturn=spp_traits["nocturnal"],
-                  crepus=spp_traits["crepuscular"],
-                  # can it go into a burrow or climb to cool off
-                  burrow=spp_traits["s.fossorial"],
-                  climb=spp_traits["s.arboreal"],
-                  shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
-                  maxdepth = 10, #maximum depth of the burrow
-                  T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]),
-                                as.numeric(spp_traits["Tmerge"]))),
-                  T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]),
-                                as.numeric(spp_traits["CTmax"]))),
-                  T_RB_min=spp_traits["Tmerge"],
-                  T_B_min=spp_traits["Tmerge"])
-	  # save the output of the biophysical model
-      pt.warmtol<- bind_rows(pt.warmtol,
-                             ecto$environ %>% as_tibble() %>%
-                               mutate(CTmax=u,
-                                      hot_tsm=as.numeric(u)-TC) %>% 
-                               group_by(DOY) %>% 
-                               mutate(dayrange=max(TC)-min(TC)) %>%
-                               ungroup() %>%
-                               summarize(n_total=n(),
-                                         n_above=sum(hot_tsm < 0),
-                                         when_tsm0=paste0(DOY[which.min(hot_tsm)], 
-                                                          collapse=', '),
-                                         max_TC=max(TC),
-                                         tsm=min(hot_tsm),
-                                         n_forage=sum(ACT == 2),
-                                         avg_dep=mean(DEP),
-                                         n_belowg=sum(DEP < 0),
-                                         max_dayrange=max(dayrange),
-                                         avg_dayrange=mean(dayrange),
-                                         species=unique(pt_locs[i,"species"]),
-                                         CTmax=u,
-                                         lat=as.numeric(pt_run[i, "latitude"]),
-                                         long=as.numeric(pt_run[i, "longitude"]),
-                                         rowid=i, error_tol=ERR)) 
-  }}
+cat(paste(spp_traits,'\n'))
+for(u in pt_loc[pt_loc$species == pt$species &
+                   pt_loc$longitude == pt$longitude &
+                   pt_loc$latitude == pt$latitude,"traitValue"]){
+      ecto<-ectotherm(Ww_g=spp_traits["Mass"],
+                      shape = 4, # shape based on leopard frog
+                      CT_max=as.numeric(u),
+                      CT_min=spp_traits["CTmin"],
+                      T_pref=spp_traits["Tpref"],
+                      # when is activity allowed
+                      diurn=spp_traits["diurnal"],
+                      nocturn=spp_traits["nocturnal"],
+                      crepus=spp_traits["crepuscular"],
+                      # can it go into a burrow or climb to cool off
+                      burrow=spp_traits["s.fossorial"],
+                      climb=spp_traits["s.arboreal"],
+                      shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                      maxdepth = 10, #maximum depth of the burrow
+                      T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]), as.numeric(spp_traits["Tmerge"])), na.rm=T),
+                      T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"])), na.rm=T),
+                      T_RB_min=spp_traits["Tmerge"],
+                      T_B_min=spp_traits["Tmerge"],
+                      # microclimate port from parent environment
+                      nyears= micro$nyears,
+                      minshades = micro$minshade,
+                      maxshades = micro$maxshade,
+                      alpha_sub = (1 - micro$REFL),
+                      DEP = micro$DEP, KS = micro$KS, b = micro$BB,
+                      PE = micro$PE, metout = micro$metout, shadmet = micro$shadmet,
+                      soil = micro$soil, shadsoil = micro$shadsoil, soilmoist = micro$soilmoist,
+                      shadmoist = micro$shadmoist, humid = micro$humid, shadhumid = micro$shadhumid,
+                      soilpot = micro$soilpot, shadpot = micro$shadpot, tcond = micro$tcond,
+                      shadtcond = micro$shadtcond, rainfall = micro$RAINFALL,
+                      preshr = rep(101325 * ((1 -
+                                                (0.0065 * as.numeric(micro$elev)/288))^(1/0.190284)),
+                                   nrow(micro$metout)), elev = as.numeric(micro$elev),
+                      longitude = as.numeric(micro$longlat[1]),
+                      latitude = as.numeric(micro$longlat[2]))
+bodytemps<-ecto$environ %>% as_tibble() %>%
+    mutate(WT=u-TC) %>%
+  group_by(YEAR, DOY) %>%
+  summarize(activity0=sum(ACT == 0),
+         activity1=sum(ACT == 1),
+         activity2=sum(ACT == 2),
+         shadeMean=round(mean(SHADE),2),
+         across(c(WT,TC,TA,TSUB, TSKY, DEP), list(mean=mean, max=max, min=min)),
+         nHoursAboveCTmax=sum(WT < 0),
+         species=unique(pt$species),
+         rowid=rw, .groups='drop') %>%
+         mutate(across(c(ends_with('mean'), ends_with('min'), ends_with('max')), ~round(.x, 3))) %>%
+  group_by(species, rowid, YEAR) %>%
+  summarize(nDays=sum(nHoursAboveCTmax != 0),
+        meannH=mean(nHoursAboveCTmax),
+        WT_ptmin=min(WT_min),
+        WT_min25=quantile(WT_min, .25),
+        WT_25=quantile(WT_mean, .25),
+        WT_75=quantile(WT_mean, .75),
+        WT_ptmean=mean(WT_mean),
+        nhrF=sum(activity2), .groups='drop',
+        CTmax=u)
+ecto_out<-bind_rows(ecto_out, bodytemps)
+gc()
+}
+write.csv(ecto_out, paste0(PATH_out, rw, '_bodytemps.csv'))
+return(ecto_out)
+}
+
+mclapply(1:nrow(pt_dfs), anuranMNMs, mc.cores=2)
 ```
 
-The above code creates an output that looks like this: 
+Three files for each point are output: microclimate model basic information, annual climate information, and annual body temperature information. 
 
 ```{r}
-# write out the result from above!!!
-str(pt.warmtol)
-#start = 3:16 ; end = 4:40
-unique(pt.warmtol$error_tol)
+PATH_onept<-'intermediate_results/one_pt/'
+pts<-NULL
+clim<-NULL
+bt<-NULL
+for(i in 1:24){
+  pts <- bind_rows(pts, read.csv(paste0(PATH_onept, i, '_microloc.csv')))
+  clim <- bind_rows(clim, read.csv(paste0(PATH_onept, i, '_ppt_dat.csv')))
+  bt <- bind_rows(bt, read.csv(paste0(PATH_onept, i, '_bodytemps.csv')))
+}
+
+pts_df<-pt_locs %>%
+  group_by(species, latitude, longitude) %>%
+   tally() %>% arrange(desc(n)) %>%
+  rowid_to_column()
+
 ```
-d
-Based on the one point interspecific comparison, we can compare interspecific thermal sensitivity by identifying the species with the lowest median warming tolerance. The below graph does that. 
 
 ```{r}
-interSp.sum<-pt.warmtol %>%
-  group_by(species) %>%
-  summarize(m=mean(tsm), sd=sd(tsm), n=factor(n(), levels=1:9),
-            ll=m-ifelse(is.na(sd),0,sd), uu=m+ifelse(is.na(sd),0,sd)) 
-interSp.sum %>%
-  mutate(spF=factor(species, levels=rev(interSp.sum$species[order(interSp.sum$m)]))) %>%
+pt.bt.df<-left_join(bt %>% select(-X), clim %>% mutate(YEAR=year - 2012 + 1), by=c('rowid','YEAR'))
+```
+
+```{r}
+pt.bt.df %>%
   ggplot()+
-  geom_vline(xintercept=0, linetype='dashed', color='grey70')+
-  geom_errorbarh(aes(y=spF, xmin=ll, xmax=uu), height=0)+
-  geom_point(aes(x=m, y=spF, shape=n))+
-  scale_y_discrete('Species')+
-  scale_x_continuous('Warming Tolerance')+
+  geom_hline(yintercept=0, linetype='dashed', color='grey')+
+  geom_line(data=. %>% group_by(species, year) %>% summarize(mWT=mean(WT_ptmin)),
+            aes(x=year, y=mWT, group=species, color=species),
+            position=position_dodge(width=.7))+
+  #geom_point(aes(x=year, y=WT_ptmin, group=CTmax, color=species),
+  #           position=position_dodge(width=.7))+
+  stat_summary(aes(x=year, y=WT_ptmin, color=species), position=position_dodge(width=.7))+
+  theme_classic()+
+  theme(legend.position='bottom')
+
+```
+
+We can compare interspecific thermal sensitivity by identifying the species with the lowest median warming tolerance. The below graph does that. 
+
+```{r }
+pt.warmtol<-pt.bt.df %>%
+  group_by(species, rowid, CTmax) %>%
+  summarize(WTmin=min(WT_ptmin),
+            WTmax=max(WT_ptmin),
+            y.meanWTmin=mean(WT_ptmin),
+            y.meanWT25=mean(WT_min25),
+            y.sdWTmin=sd(WT_ptmin))
+write.csv(pt.warmtol, 'intermediate_results/ptwarmtol_fig1adata.csv', row.names=F)
+```
+
+```{r}
+pt.WTord<-pt.warmtol %>% group_by(species) %>% summarize(mWTmin=mean(y.meanWTmin)) %>%
+  select(species, mWTmin) %>% arrange(mWTmin) %>% pull(species)
+pt.warmtol %>%
+  mutate(spF=factor(species, levels=rev(pt.WTord))) %>%
+  ggplot()+
+  geom_hline(yintercept=0, linetype='dashed', color='grey70')+
+  geom_linerange(aes(x=spF, ymin=WTmin,  ymax=WTmax, 
+                     y=y.meanWTmin, group=CTmax), 
+                 position=position_dodge(width=.8), color='lightgrey')+
+  geom_linerange(aes(x=spF, ymin=y.meanWTmin-y.sdWTmin,  ymax=y.meanWTmin+y.sdWTmin, 
+                     y=y.meanWTmin, group=CTmax), 
+                 position=position_dodge(width=.8))+
+  geom_point(aes(y=y.meanWTmin, x=spF, group=CTmax), position=position_dodge(width=.8))+
+  scale_x_discrete('Species')+
+  scale_y_continuous('Warming Tolerance', labels=tmplab)+
   scale_shape_discrete('N\nPoints')+
   theme_classic()+
   theme(axis.text.y=element_text(face='italic', size=9),
         axis.title=element_text(size=9),
         legend.position = c(.9,.77),
         legend.text = element_text(size=8),
-        legend.title = element_text(size=8))
-ggsave('results/sp_pt_rcsgraph.jpg', width=3.5, height=3.5)
+        legend.title = element_text(size=8))+
+  coord_flip()
+
 ```
+

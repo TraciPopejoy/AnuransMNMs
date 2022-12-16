@@ -1,0 +1,314 @@
+---
+title: "More Complicated MNMs"
+author: "TP DuBose"
+date: "11/17/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse); library(NicheMapR)
+micro<-micro_usa(loc=c(-81,34))
+```
+
+
+```{r}
+spp_traits<-read.csv('input_data/inputed_physio_traits_11152022.csv') %>% 
+  filter(species == 'Lithobates catesbeianus')
+ecto_g<-ectotherm(Ww_g=spp_traits["Mass"], 
+                shape = 4, # shape based on leopard frog
+                CT_max=spp_traits["CTmax"], 
+                CT_min=spp_traits["CTmin"], 
+                T_pref=spp_traits["Tpref"],
+                # when is activity allowed
+                diurn=spp_traits["diurnal"],
+                nocturn=spp_traits["nocturnal"],
+                crepus=spp_traits["crepuscular"],
+                # can it go into a burrow or climb to cool off
+                burrow=spp_traits["s.fossorial"],
+                climb=spp_traits["s.arboreal"],
+                shdburrow = 1, 
+                maxdepth = 10, #maximum depth of the burrow
+                T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]),  as.numeric(spp_traits["Tmerge"]))),
+                T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"]))),
+                T_RB_min=spp_traits["Tmerge"],
+                T_B_min=spp_traits["Tmerge"])
+ecto_w<-ectotherm(Ww_g=spp_traits["Mass"], 
+                shape = 4, # shape based on leopard frog
+                CT_max=spp_traits["CTmax"], 
+                CT_min=spp_traits["CTmin"], 
+                T_pref=spp_traits["Tpref"],
+                # when is activity allowed
+                diurn=spp_traits["diurnal"],
+                nocturn=spp_traits["nocturnal"],
+                crepus=spp_traits["crepuscular"],
+                # can it go into a burrow or climb to cool off
+                burrow=spp_traits["s.fossorial"],
+                climb=spp_traits["s.arboreal"],
+                shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                maxdepth = 10, #maximum depth of the burrow
+                T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]), as.numeric(spp_traits["Tmerge"]))),
+                T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"]))),
+                T_RB_min=spp_traits["Tmerge"],
+                T_B_min=spp_traits["Tmerge"],
+                fluid=1)
+```
+
+```{r}
+bind_rows(ecto_g$environ[,1:13] %>% as_tibble() %>%
+  mutate(type='on ground') %>% rowid_to_column(),
+  ecto_w$environ[,1:13] %>% as_tibble() %>%
+  mutate(type='in water') %>% rowid_to_column()) %>%
+  dplyr::select(type, TC, TA, DEP, DOY, YEAR, rowid) %>%
+  pivot_wider(names_from=type, values_from = TC)%>%
+  
+  mutate(dif=`in water`-`on ground`) %>% filter(YEAR == 2, dif !=0) %>%
+  ggplot()+geom_point(aes(x=rowid, y=dif))
+  filter(DOY > 70, DOY < 80, YEAR==2) %>%
+  ggplot()+
+  geom_line(aes(x=rowid, y=TC, color=type))+theme_bw()
+```
+
+```{r}
+
+```
+
+
+# Implement Life Stage MNMs
+
+```{r full analysis, eval=F}
+library(tidyverse); library(lubridate); library(NicheMapR)
+
+read.csv('input_data/inputed_physio_traits_11152022.csv') %>% 
+  filter(grepl('Dryophytes',species))
+
+# where to save the results
+PATH_out<-''
+# sample points at which to run the microclimate models
+pts <- read.csv('intermediate_results/points_ran_2022-11-17.csv') %>%
+  filter(grepl('\\,', spp_all),
+         grepl('catesbeian', spp_all)) %>%
+  sample_n(5)
+# bring trait values in 
+spp_traits<-read.csv('input_data/inputed_physio_traits_11152022.csv') %>% 
+  filter(species == "Lithobates catesbeianus")
+
+tad_traits<-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%
+  filter(!(lifeStage %in% c('adult','unknown'))) %>% 
+  mutate(lifeStage=ifelse(grepl('stage', lifeStage), 'tadpole',lifeStage)) %>%
+  group_by(species, traitName, lifeStage) %>%
+  summarize(meanVal=mean(as.numeric(traitValue), na.rm=T)) %>%
+  filter(traitName!= 'Mass', traitName !='Activity') %>%
+  group_by(species) %>% mutate(n=n()) %>%
+  filter(n>1) %>%
+  arrange(desc(n)) %>%
+  filter(species == 'Lithobates catesbeianus')
+thermal.s<-data.frame(CTmin=c(1,-1.2,1.1),
+                      CTmax=c(38.1, 38.1, 32.7),
+                      TFormin=rep(16.37,3),
+                      TFormax=rep(30.42,3),
+                      TBask=rep(17.8, 3),
+                      Tpref=c(24.2, 26.7, 22.9)) %>% as.matrix()
+
+# a for loop to run through some points!
+for(i in 1:nrow(pts)){
+micro<-micro_ncep(loc = c(pts[i,1], pts[i,2]),
+           dstart = "01/10/2019", dfinish = "31/12/2020",
+           DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+           minshade = 0, maxshade = 90, runshade=1,
+           # soilgrids=1,
+           spatial='../ncep_data_all/',
+           dem.res=1000, # requested resolution DEM from elevatr in meters
+           Usrhyt = 0.01, # local height for organism
+           ERR = 1.5)
+saveRDS(micro, paste0(PATH_out, pts[i,"rowid"], "_micro.rds"))
+
+for(u in c(0, 1)){
+  assign(paste0('ecto.', u),
+         ectotherm(Ww_g=spp_traits["Mass"], 
+                shape = 4, # shape based on leopard frog
+                CT_max=spp_traits["CTmax"], 
+                CT_min=spp_traits["CTmin"], 
+                T_pref=spp_traits["Tpref"],
+                # when is activity allowed
+                diurn=spp_traits["diurnal"],
+                nocturn=spp_traits["nocturnal"],
+                crepus=spp_traits["crepuscular"],
+                # can it go into a burrow or climb to cool off
+                burrow=spp_traits["s.fossorial"],
+                climb=spp_traits["s.arboreal"],
+                shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                maxdepth = 10, #maximum depth of the burrow
+                T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]), as.numeric(spp_traits["Tmerge"]))),
+                T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"]))),
+                T_RB_min=spp_traits["Tmerge"],
+                T_B_min=spp_traits["Tmerge"],
+                fluid=u))
+}
+dailysumm<-bind_rows(ecto.0$environ %>% as_tibble() %>% mutate(fluid='air'),
+  ecto.1$environ %>% as_tibble() %>% mutate(fluid='water')) %>%
+  bind_cols(date=rep(micro$dates,2), doy=rep(date(micro$dates),2)) %>%
+  dplyr::select(YEAR, DAY, TIME, TC, TA, TSUB, ACT, fluid, doy) %>%
+  pivot_wider(names_from=fluid, values_from=c(TC, TA, TSUB, ACT)) %>%
+  mutate(body_temp_dif=TC_air-TC_water,
+         waterWT=as.numeric(spp_traits["CTmax"])-TC_water,
+         airWT=as.numeric(spp_traits["CTmax"])-TC_air) %>%
+  dplyr::select(-YEAR, -DAY, -TIME) %>%
+  group_by(doy) %>%
+  summarize(across(everything(), list(mean=mean, min=min, max=max, q20= ~ quantile(.x, .2))))
+write.csv(dailysumm, paste0(PATH_out, pts[i,"rowid"],'_WT_dailysum.csv'), row.names=F)
+
+# try to run the dynamic energy budget model for tadpoles
+ecto.tad<- ectotherm(Ww_g=spp_traits["Mass"], 
+                     shape = 4, # shape based on leopard frog
+                     stage=1,
+                     thermal_stages=thermal.s,
+                     amphibreed=1,
+                     amphistage=1,
+                     CT_max=spp_traits["CTmax"], 
+                     CT_min=spp_traits["CTmin"], 
+                     T_pref=spp_traits["Tpref"],
+                     # when is activity allowed
+                     diurn=spp_traits["diurnal"],
+                     nocturn=spp_traits["nocturnal"],
+                     crepus=spp_traits["crepuscular"],
+                     # can it go into a burrow or climb to cool off
+                     burrow=spp_traits["s.fossorial"],
+                     climb=spp_traits["s.arboreal"],
+                     shdburrow = 1, #the animal's retreat is in the open (0), in the shade when above or below CTmin in sun (1) or in shade always
+                     maxdepth = 10, #maximum depth of the burrow
+                     T_F_min=max(c(as.numeric(spp_traits["Tforage_min"]), as.numeric(spp_traits["Tmerge"]))),
+                     T_F_max=min(c(as.numeric(spp_traits["Tforage_max"]), as.numeric(spp_traits["CTmax"]))),
+                     T_RB_min=spp_traits["Tmerge"],
+                     T_B_min=spp_traits["Tmerge"],
+                     DEB=1)
+ecto.tad$debout %>% as_tibble() %>%
+  left_join(ecto.tad$environ %>% as_tibble()) %>%
+  write.csv(dailysumm, paste0(PATH_out, pts[i,"rowid"],'_tadpole.csv'), row.names=F)
+cat(paste('completed', i, 'of', nrow(pts), 'points\n'))
+}
+
+?micro_ncep
+
+dailysumm %>%
+  ggplot()+
+  geom_density(aes(x=dailyminWT, fill=name), alpha=0.5)
+dailysumm %>%
+  ggplot()+
+  geom_line(aes(x=doy, y=dailyminWT, group=name, color=name))+
+  theme_classic()
+seasons.plt<- data.frame(x.min=date(c('2019-10-01','2020-01-01','2020-04-01','2020-07-01', '2020-10-01')),
+                         x.max=date(c('2019-12-31','2020-03-31','2020-06-30','2020-09-30','2020-12-31')),
+                         season=factor(c('fall','winter','spring','summer','fall'),
+                                       levels=c('winter','spring','summer','fall')))
+
+seasons.binned<-data.frame(doy= dailysumm %>% pull(doy) %>% unique(),
+                           x.minF=base::cut(dailysumm %>% pull(doy) %>% unique(),
+                                            breaks=c(seasons.plt$x.min, date('2021-01-01')))) %>%
+  left_join(seasons.plt %>% 
+              mutate(x.minF=factor(x.min)))
+
+difsum<-dailysumm %>% ungroup() %>%
+  pivot_wider(values_from=dailyminWT) %>%
+  mutate(WTdif=airWT - waterWT) %>%
+  #filter(WTdif > 0.3 | WTdif < -0.3) %>%
+  mutate(less.conservative=ifelse(WTdif > 0, 'air','water')) %>%
+  left_join(seasons.binned) %>%
+  group_by(season, less.conservative) %>%
+  summarize(n=n(), meanDif=mean(WTdif), sdDif=sd(WTdif), .groups='drop') %>%
+  mutate(doy=date(case_when(season=='fall' ~ '2020-11-15',
+                       season == 'spring' ~ '2020-05-15',
+                       season == 'summer' ~ '2020-08-15',
+                       season == 'winter' ~ '2020-02-15')),
+         yval=ifelse(less.conservative == 'air', max(meanDif)+3, min(meanDif)-3))
+
+dailysumm %>%
+  pivot_wider(values_from=dailyminWT) %>%
+  mutate(WTdif=airWT - waterWT) %>%
+  filter(WTdif > 0.4 | WTdif < -0.4) %>%
+  ggplot()+ 
+  geom_rect(data=seasons.plt, 
+            aes(xmin=x.min, xmax=x.max, ymin=-Inf, ymax=Inf, fill=season),
+            alpha=0.4)+
+  geom_hline(yintercept=0, linetype='dashed', color='darkgrey')+
+  geom_line(aes(x=doy, y=WTdif))+
+  scale_y_continuous('WT difference\n(+ = air larger, - = water larger)')+
+  scale_fill_manual(values=c('#C9F1FD','#FEF8FA','#D6F1C6','#F9CC87'))+
+  theme_classic()
+
+difsum %>%
+  mutate(absDif=abs(meanDif)) %>%
+  ggplot()+ 
+  geom_linerange(aes(x=less.conservative, 
+                     ymin=absDif-sdDif, ymax=absDif+sdDif, y=absDif))+
+  geom_point(aes(x=less.conservative, fill=season, 
+                 y=absDif, size=n), pch=21)+
+  scale_color_manual(values=c('#C9F1FD','#FEF8FA','#D6F1C6','#F9CC87'),
+                     aesthetics=c('fill','color'), guide='none')+
+  facet_grid(~season)+
+  theme_classic()
+
+bodytemps<-ecto$environ %>% as_tibble() %>%
+  mutate(WT=as.numeric(spp_traits["CTmax"])-TC) %>% 
+  group_by(DOY) %>% 
+  summarize(activity0=sum(ACT == 0),
+         activity1=sum(ACT == 1),
+         activity2=sum(ACT == 2),
+         shadeMean=mean(SHADE),
+         across(c(WT,TC,TA,TSUB, TSKY, DEP), list(mean=mean, max=max, min=min)),
+         nHoursAboveCTmax=sum(WT < 0))
+# write out species output
+library(lubridate)
+micro_unshad<-left_join(micro$metout %>% as_tibble() %>%
+                          bind_cols(DATE=date((micro$dates))) %>% 
+  group_by(DATE) %>%
+  summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
+                   list(mean=mean, max=max, min=min)),
+            across(c(RHLOC, RH), list(mean=mean, min=min)),
+            across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
+    mutate(across(-DATE, ~round(.x, 3)))%>%
+    bind_cols(RAINFALL=micro$RAINFALL),
+  micro$soil %>% as_tibble() %>% 
+    bind_cols(DATE=date((micro$dates))) %>% 
+    group_by(DATE) %>%
+    summarize(across(-TIME, mean)) %>%
+    mutate(across(-DATE,~round(.x, 2))), 
+  by='DATE')
+
+micro_shad<-left_join(micro$shadmet %>% as_tibble() %>%
+                        bind_cols(DATE=date(micro$dates)) %>% 
+                        group_by(DATE) %>%
+            summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
+                             list(mean=mean, max=max, min=min)),
+                      across(c(RHLOC, RH), list(mean=mean, min=min)),
+                      across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
+            mutate(across(-DATE, ~round(.x, 3))),
+          micro$shadsoil %>% as_tibble() %>%
+            bind_cols(DATE=date(micro$dates)) %>% 
+            group_by(DATE) %>%
+            summarize(across(-TIME, mean)) %>%
+            mutate(across(-DATE,~round(.x, 2))), 
+          by='DATE')
+data.frame(rw=1,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           tRainfall=sum(micro$RAINFALL),
+           evel=micro$elev,
+           slope=micro$SLOPE,
+           aspect=micro$ASPECT) %>%
+  write.csv(paste0(PATH_out, '_', rw,'_microloc.csv'))
+if(write.micro.out=T){
+  write.csv(micro_unshad, paste0(PATH_out, '_', rw,'_microunshades.csv'))
+  write.csv(micro_shad, paste0(PATH_out, '_', rw,'_microshades.csv'))}
+
+
+bodytemps %>%
+  summarize(nTotal=n(),
+            nHoursAbove=sum(nHoursAboveCTmax), 
+            nDays=sum(WT_min < 0),#days they had 0 warming tolerance for atleast a 
+            maxTC=round(max(TC_max),4),
+            minWT=round(min(WT_min),4))
+```
+
+
+```

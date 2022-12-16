@@ -39,14 +39,9 @@ caption='Missing Trait Data among focal species',
 col.names = c('Species', 'N missing Traits', 'Missing Data %'))
 ```
 
-Revisiting how different imputation methods work under bias
-```{r, echo=FALSE, fig.cap="", out.width = '90%', out.height='80%', fig.align='center'}
-knitr::include_graphics("C:/Users/Owner/Desktop/Git/AnuranMNMs/input_data/Johnson2021_error_trait_imputatoin.png")
-```
-
 ## Anuran Phylogeny
 
-Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for. To improve the fit of this imputation, for our focal species, we are recalculating means that remove traits from far locals (e.g., Canada). 
+Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for. To improve the fit of this imputation, for our focal species, we are recalculating means that remove traits from far localities (e.g., Canada). 
 
 ```{r}
 new_trait_mean<-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%  filter(species %in% focal_spp, 
@@ -94,7 +89,7 @@ se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina'
 ```
 
 ```{r, echo=F}
-usa_traits<-left_join(usa, trait_filt %>%
+trait_filtL<- trait_filt %>%
   mutate(ID=case_when(grepl('Texas', verbatimLocality) ~ 'texas',
                       grepl('Missouri', verbatimLocality) ~ 'missouri',
                       grepl('Illinois', verbatimLocality) | 
@@ -121,21 +116,45 @@ usa_traits<-left_join(usa, trait_filt %>%
                                               "40 37' N, 83 17' W") ~ 'ohio',
                       verbatimLocality == "44 28'45\"N, 87 37'15\" W" ~ 'wisconsin',
                       verbatimLocality == "N 0695928 and W 4482919, zone 15 using NAD27 CONUS map datum in UTM" ~ 'illinois',
-         T ~ 'study area')) %>%
-    distinct(traitName, ID) %>%
-    group_by(ID) %>% summarize(n_traits=length(unique(traitName))),
+                      grepl('Alabama', verbatimLocality)~'alabama',
+                         grepl('Florida', verbatimLocality)|
+                           grepl('FL', verbatimLocality) ~ 'florida',
+                         grepl('Georgia', verbatimLocality) | 
+                           grepl('GA', verbatimLocality) ~ 'georgia',
+                         grepl('Mississippi', verbatimLocality) ~'mississippi',
+                         grepl('North Carolina', verbatimLocality) ~'north carolina',
+                         grepl('South Carolina', verbatimLocality) ~ 'south carolina', 
+                         grepl('Tennessee', verbatimLocality) ~ 'tennessee',
+                         grepl('Virginia', verbatimLocality) ~ 'virginia',
+         T ~ 'study area')) 
+usa_traits<-left_join(usa, trait_filtL %>%
+                        distinct(traitName, ID) %>%
+                        group_by(ID) %>% summarize(n_traits=length(unique(traitName))),
   by='ID') %>%
   mutate(n_traits = factor(ifelse(ID %in% c('south dakota', 'nevada', "maine", "minnesota",
                                             "massachusetts", "connecticut","rhode island"), 
                            0, n_traits))) 
+sf::sf_use_s2(FALSE)
+library(ggspatial)
 usa_traits %>%
   ggplot()+
   geom_sf(aes(fill=n_traits))+
-  geom_sf(data=se %>% st_transform(st_crs(usa)), fill='lightgrey')+
-  scale_fill_manual('N traits\nused', values=c(met.brewer('Benedictus', 9)[c(1, 5:9)]))+
+  geom_sf(data=se %>% st_make_valid() %>% st_union() %>% st_transform(st_crs(usa)) , fill=NA, size=1.5, color='black')+
+  scale_fill_manual('N traits\nused', values=c(met.brewer('Benedictus', 10)[c(1, 6:10)]))+
   theme_void()
-ggsave('results/FigS2_traits_removed.jpg', width=6, height=4)
+ggsave('results/FigS2_traits_removed.jpg', width=4, height=2.75)
+sf::sf_use_s2(TRUE)
 ```
+
+So we removed `r nrows(new`
+
+```{r}
+nrow(new_trait_mean)-nrow(trait_filt)
+anti_join(new_trait_mean, trait_filt) %>% ungroup() %>% count(species)
+```
+
+
+I did this based on the localities' state location distance from the southeast region.
 
 ```{r}
 edge_sts<-usa_traits %>% filter(ID %in% c("mississippi", "tennessee", "virginia")) %>% 
@@ -270,7 +289,7 @@ summary(p_lamda)
 #results!
 imp_results <- p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
   as_tibble() %>%
-  bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
+  bind_cols(species=rownames(p_lamda$anc_recon[1:length(tree.pruned$tip.label),])) %>%
   left_join(trait.mat, by='species')%>%
   pivot_longer(-species) %>%
   mutate(variable=gsub('.y','', gsub('\\.x','', name)),
@@ -341,6 +360,8 @@ imp_results %>%
 
 ## Outputting the trait tables to query for MNMs
 
+Below, I build two related trait datasets that incorporate traits from this triat imputation analysis, activity data from ATraiU-TaDS, and habitat data from ATraiU. One dataframe is for the MNM manuscript that contains the 13 species that meet our criteria for inclusion in the MNM manuscript (at least 3 of 4 important MNM traits). The second is MNM trait data for all 40 species considered within the SE US for the trait database compilation. The second will aid in expanding the comparison paper species list. 
+
 ```{r}
 atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv', 
                  show_col_types = F)
@@ -374,7 +395,34 @@ used_traits<-imp_results %>% #imputed thermoregulation traits
          s.fossorial = as.numeric(s.fossorial),
          s.arboreal = as.numeric(s.arboreal)) 
 write.csv(used_traits, 'input_data/inputed_physio_traits_11152022.csv', row.names=F)
+
+# writing out all imputed traits to explore options of expanding comparison species list 
+p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
+   as_tibble() %>%
+  bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
+  mutate(species=gsub('_',' ', species)) %>%
+  # bring in ATraiU for burrowing & climbing
+  left_join(taxa_table %>% dplyr::select(species, Tree.name.syn),
+            by=c('species'='Tree.name.syn')) %>%
+  select(-species) %>% rename(species=species.y) %>%
+  left_join(atraiu %>% select(latin_name, s.fossorial, s.arboreal),
+            by=c('species'='latin_name')) %>%
+  # bring in categorical activity data
+  left_join(read.csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv') %>%
+              dplyr::select(species, nocturnal, diurnal, crepuscular) %>%
+              mutate(across(-species, ~ifelse(.x > 0,1,0))), by='species') %>%
+  # estimating activity traits for Lithobates areolatus
+  mutate(nocturnal=case_when(species=='Lithobates areolatus'~ 1, T~nocturnal),
+         diurnal=case_when(species == 'Lithobates areolatus'~0, T~diurnal),
+         crepuscular = case_when(species == 'Lithobates areolatus' ~ 0, T~crepuscular),
+         s.fossorial = as.numeric(s.fossorial),
+         s.arboreal = as.numeric(s.arboreal)) %>%
+  # rearranging columns
+  dplyr::select(species, everything()) %>%
+  write.csv('input_data/MNM_traits_SEspp.csv', row.names = F)
 ```
+
+The figures below show the variation among taxa in major traits used in our mechanistic niche model. These interspecific traits, with variation in geographic location, will influence the outcomes of the MNMs. 
 
 ```{r, fig.width=5, fig.height=2, echo=F}
 nictp<-theme_classic()+
@@ -386,8 +434,6 @@ ggplot(plt.df, aes(x=family, y=Mass, label=pltsp)) +
   geom_point() + geom_text_repel(size=3)+
   scale_y_log10('Wet Mass, g', breaks=c(1, 10, 50, 100, 250))+nictp
 ```
-
-
 
 ```{r thermal traits, fig.width=7, fig.height=2.5, echo=F}
 # thermal limits & scope
@@ -518,11 +564,13 @@ kable(tibble(anova(asy, int, rate, asyint, allSE)) %>%
   mutate(`Model name`=c('asy','int','rate','asyint','allSE')) %>%
   arrange(desc(logLik)),
   caption='Models relating acclimation temperature to CTmax')
-summary(asyint)
+summary(asy)
 ```
 
+Using the above model, we could try to account for acclimation and reestimate CTmax at each point. But, CTmax doesn't seem to vary that much after an acclimation temperature of 11 degrees and it would potentially remove a lot of interspecific variation. 
+
 ```{r plot what acclimation looks like, echo=F, fig.width=6, fig.height=4}
-sapply(predict(asyint, 
+sapply(predict(asy, 
         data.frame(x=rep(seq(5,30,1), each=5),
                    family=rep(unique(df$family), 26)), asList=T), '[') %>%
   as_tibble() %>% pivot_longer(everything()) %>%
@@ -542,8 +590,12 @@ sapply(predict(asyint,
   theme_classic()
 ```
 
-```{r}
-all_traits %>%
+## Intraspecific variation in thermoregulation traits
+
+For species where we do have intraspecific estimates of traits, we can compare the intraspecific trait variation with interspecific trait variation. 
+
+```{r trait variation, echo=F}
+kable(all_traits %>%
   filter(species %in% focal_spp,
          traitName == 'CTmax',
          lifeStage %in% c('unknown','adult')) %>%
@@ -558,11 +610,47 @@ all_traits %>%
             maxCTmax=max(traitValue)) %>%
   mutate(CTmax_range=maxCTmax-minCTmax) %>%
   arrange(desc(CTmax_range)) %>%
-  filter(CTmax_range > 0)
-
+  filter(CTmax_range > 0))
 ```
 
+We do this using an ANOVA. 
+
+```{r}
+intra.df<-all_traits %>%
+  filter(species %in% focal_spp,
+         !(traitName %in% c('Activity', 'Tforage_max','Tforage_min','Tbask', 'Mass')),
+         lifeStage %in% c('unknown','adult')) %>%
+  mutate(traitValue = as.numeric(traitValue)) %>%
+  # only keep maximum CT for each population
+  group_by(species, traitName, verbatimLocality) %>% 
+  filter(traitValue == max(traitValue)) %>%
+  group_by(species, traitName) %>%
+  mutate(n=n()) %>% filter(n != 1) %>%
+  ungroup()
+intra.df %>% group_by(traitName) %>% summarize(n=n(), spp=n_distinct(species))
+```
+
+```{r}
+anova(lm(traitValue~species, data=intra.df[intra.df$traitName=='CTmax',]))
+anova(lm(traitValue~species, data=intra.df[intra.df$traitName=='CTmin',]))
+anova(lm(traitValue~species, data=intra.df[intra.df$traitName=='Tmerge',]))
+anova(lm(traitValue~species, data=intra.df[intra.df$traitName=='Tpref',]))
+```
+```{r intra variation comp, echo=F, fig.width=6.5, fig.height=3}
+intra.df %>% 
+  ggplot()+geom_boxplot(aes(y=species, x=traitValue))+
+  facet_wrap(~traitName, scales='free', ncol=2)+
+  scale_x_continuous(expression('Trait Value, temperature  ('*degree*C*')'))+
+  theme_classic()+ theme(axis.text.y=element_text(face='italic'), strip.background=element_blank(),
+                         strip.text = element_text(face='bold'))
+```
+
+I think it sufficient to say that, except for CTmin, intraspecific variance is less than interspecific variance and we are more confident in using interspecific traits for our MNMs.
+
 # Downloading NCEP data 
+
+The below code is by Mike Kearney and was reported in the NicheMapR google group as a way to increase the speed of microclimate model creation. I ran it for ~ 10 years and then uploaded the results onto the HPC.
+
 ```{r download ncep, eval=F}
 # Code by Mike Kearney!
 library(curl)
@@ -635,6 +723,8 @@ for(i in 1:length(files)){
   file.remove(file2) # delete the temporary file
 }
 ```
+
+I was concerned that longer time frames would make creating models more difficult. When the model can converge, more years does not significantly change the time needed to create the model, only the size of the resulting object. 
 
 ```{r length microclim, fig.width=6, fig.height=1.5, echo=F}
 microtest<-read.csv('micro_20221111.csv')
@@ -710,6 +800,7 @@ se_pts_df <- pts %>%
 write.csv(se_pts_df, paste0('points_ran_', format(Sys.Date()), '.csv'), row.names = F)
 ```
 
+To investigate the amount of a species' latitudinal gradient that is represented in our region, we rasterize species IUCN range polygons and our 5km buffered estimates of species occurrence at a .5 decimal degree spatial resolution and plot the resulting latitudinal distribution. This figure is found within the supplement of our paper. 
 
 ```{r, fig.height=2.7, fig.width=6.5}
 # bring in the IUCN range shapefile to filter point occurrences
@@ -800,8 +891,4 @@ kable(latlist_iucn %>%
   caption='Percent of species IUCN range, gridded at a .5 decimal degree resolution, below the maximum latitude of our study region',
   col.names = c('species','% below 34.46 N'))
 ```  
-
-
-Now that we've have that grid, we then populate the grid with known occurrences for our focal species. Within each grid, we then identify the point with the lowest distance to all other points (and maximum year if that point is represented multiple times). We will create a 2020 microclimate for that point, which will be used as input for all species occupying that grid cell. This loses some of the biology associated with the point occurrence (location & year information) but does make sure that the comparisons are based on the ecotherm model, not subtle differences in the microclimate model. 
-
 

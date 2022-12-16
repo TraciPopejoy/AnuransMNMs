@@ -5,21 +5,8 @@ date: "11/22/2022"
 output: pdf_document
 ---
 
-Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code and save myself time.
+Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code and save myself time. I run into an odd FORTRAN error and used the last answer on this [StackXchange question](https://stackoverflow.com/questions/7891073/time-out-an-r-command-via-something-like-try) to time out the process and prevent the core from hanging until the end of the SLURM job. 
 
-missing bt 261663 
- missing bt 285860 
- missing bt 309511 
- missing bt 451033 
- missing bt 516731 
- missing bt 788657 
- missing bt 811048 
- missing bt 818211 
- missing bt 835690 
- missing bt 840889 
- missing bt 867998 
- missing bt 872008 
- missing bt 891954
 
 ```{r anuran parallel script, eval=F}
 # bash script to programatically run Mechanistic Niche models ----
@@ -27,139 +14,37 @@ missing bt 261663
 
 #interact -A usgs_rcs -t 2:00:00 -p normal_q -N 1 -c 2 # code to start an interactive session
 #module load containers/singularity 
-#singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript AnuranMNMParallel.r
+#singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
 
-# problem child models
-#221010 22726 24648 293372 33108 347468 424278 532485 6040 670309 787307 897533 963679
-
-# set up the libraries
-.libPaths(.libPaths()[3:1])
-#library(devtools)
-#devtools::install_github('mrke/NicheMapR')
-#devtools::install_github('ilyamaclean/microclima')
-library(tidyverse); library(maps);  library(sf); library(parallel); library(NicheMapR); library(hoardr); library(stars)
-
-# INPUTS ------------
-# paths
-PATH <- "./" #arc
-PATH_out <- paste0(PATH, "results/") # where to save the output
-# traits used to parameterize the ectotherm function
-traits <- read.csv(paste0(PATH, "inputed_traits.csv")) %>%
-  mutate(across(c('s.fossorial', 's.arboreal', 'nocturnal','diurnal','crepuscular'),
-                as.numeric))
-focal_spp<-traits %>% pull(species) %>% unique() # focal species to run models for
-
-# completed points
-pts_done <- c(gsub('*_bodytemps.csv','', list.files(PATH_out, 'body')),
-                read.csv('models_run2022-11-21.csv') %>% pull(rowid))
-
-# points at which to run the microclimate model
-pts_df<-read.csv(paste0(PATH, "points_to_run.csv")) %>%
-            filter(!(rowid %in% pts_done))
-# model parameters
-start_date="01/01/2012"
-end_date="31/12/2020"
-cat('\ndata loaded\n')
-# FUNCTION WHICH WE USE TO PARALLALIZE CODE ----------
-# it should run the microclimate model and then an ectotherm model for each species found in that grid
-anuranMNMs<-function(rw, write.micro.out=F){
-  pt<-pts_df[pts_df$rowid==rw,]
-  cat(paste0(rw, ' row number \n', round(pt[1,1],3), '  ',round(pt[1,2], 3),'\n'))
-  ecto_out <- NULL
-  ERR <- 1.5
-  micro <- micro_ncep(loc = c(as.numeric(pt[1,1]),as.numeric(pt[1,2])),
-                     dstart = start_date, dfinish = end_date,
-                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
-                     minshade = 0, maxshade = 90, runshade=1,
-                    # soilgrids=1,
-                     spatial='./ncep_data/ncep_data',
-                     dem.res=1000, # requested resolution DEM from elevatr in meters
-                     Usrhyt = 0.01, # local height for organism
-                     ERR = ERR,
-                     run.gads=2)
-cat(paste0(min(micro$metout[,1]), ' min micro for ', rw, ' \n'))
-  gc()
-  while(min(micro$metout[,1])==0 & ERR <= 6){
-        cat("model crashed, trying a higher error tolerance \n")
-        ERR <- ERR + 0.25
-
-               # rerun the microclimate with slightly higher error tolerance allowed
-        micro <- micro_ncep(loc = c(as.numeric(pt[1,1]),as.numeric(pt[1,2])),
-                     dstart = start_date, dfinish = end_date,
-                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
-                     minshade = 0, maxshade = 90, runshade=1,
-                    #soilgrids=1,
-                     spatial='./ncep_data/ncep_data',
-                     dem.res=1000, # requested resolution DEM from elevatr in meters
-                     Usrhyt = 0.01, # local height for organism
-                     ERR = ERR,
-                     run.gads=2)
-        gc()
-      }
-
-if(min(micro$metout[,1])==0){
-mc.df<-data.frame(rowid=rw,
-           lat=micro$longlat[2],
-           long=micro$longlat[1],
-           notes='broken model',
-           err=ERR)
-write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
-        }else{
-mc.df<-data.frame(rowid=rw,
-           lat=micro$longlat[2],
-           long=micro$longlat[1],
-           tRainfall=sum(micro$RAINFALL),
+    tRainfall=sum(micro$RAINFALL),
+	   aRainfall=sum(micro$RAINFALL)/(length(micro$dates2)/365),
            evel=micro$elev,
            slope=micro$SLOPE,
            aspect=micro$ASPECT,
-           err=ERR) %>%
-  mutate(across(-c(rowid, lat, long), ~round(.x, 3)))
+	   err=ERR) %>% 
+mutate(across(-c(rowid, lat, long), ~round(.x, 3))) 
 write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
-
-if(write.micro.out==T){
-micro_unshad<-left_join(micro$metout %>% as_tibble() %>%
-                          bind_cols(DATE=date((micro$dates))) %>%
-  group_by(DATE) %>%
-  summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
-                   list(mean=mean, max=max, min=min)),
-            across(c(RHLOC, RH), list(mean=mean, min=min)),
-            across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
-    mutate(across(-DATE, ~round(.x, 3)))%>%
-    bind_cols(RAINFALL=micro$RAINFALL),
-  micro$soil %>% as_tibble() %>%
-    bind_cols(DATE=date((micro$dates))) %>%
-       group_by(DATE) %>%
-    summarize(across(-TIME, mean)) %>%
-    mutate(across(-DATE,~round(.x, 2))),
-  by='DATE')
-
-micro_shad<-left_join(micro$shadmet %>% as_tibble() %>%
-                        bind_cols(DATE=date(micro$dates)) %>%
-                        group_by(DATE) %>%
-            summarize(across(c(TALOC, TAREF, RHLOC, RH, POOLDEP, TSKYC, SNOWDEP),
-                             list(mean=mean, max=max, min=min)),
-                      across(c(RHLOC, RH), list(mean=mean, min=min)),
-                      across(c(POOLDEP, SNOWDEP), list(mean=mean, max=max))) %>%
-            mutate(across(-DATE, ~round(.x, 3))),
-          micro$shadsoil %>% as_tibble() %>%
-            bind_cols(DATE=date(micro$dates)) %>%
-            group_by(DATE) %>%
-            summarize(across(-TIME, mean)) %>%
-            mutate(across(-DATE,~round(.x, 2))),
-          by='DATE')
-
-write.csv(micro_unshad, paste0(PATH_out, '_', rw,'_microunshades.csv'), row.names=F)
-write.csv(micro_shad, paste0(PATH_out, '_', rw,'_microshades.csv'), row.names=F)}
+bind_cols(ppt=micro$RAINFALL, dat=micro$dates2) %>% mutate(year=substr(dat,1,4)) %>% 
+	group_by(year) %>% 
+	summarize(mppt=mean(ppt), sdppt=sd(ppt), tppt=sum(ppt), .groups='drop') %>%
+left_join(micro$metout %>%
+	     bind_cols(dat=micro$dates) %>%
+	     mutate(year=substr(dat, 1,4)) %>% 
+	     group_by(year) %>% summarize(across(c(TALOC, TAREF), list(mean=mean, sd=sd, min=min, max=max)), .groups='drop'),
+	  by='year') %>%
+mutate(across(-c(year), ~round(.x, 2)), rowid=rw) %>%
+write.csv(paste0(PATH_out, rw, '_ppt_dat.csv'), row.names=F) 
 gc()
 
+# ECTOTHERM MODEL STARTS -------
   for(spp in focal_spp){
     if(grepl(spp, pt$spp_all)){
       spp_traits <- traits %>% filter(species == spp)
-
-      ecto<-ectotherm(Ww_g=spp_traits["Mass"],
+      cat(paste('ectotherm model for', spp, '\n'))
+      ecto<-ectotherm(Ww_g=spp_traits["Mass"], 
                       shape = 4, # shape based on leopard frog
-                      CT_max=spp_traits["CTmax"],
-                      CT_min=spp_traits["CTmin"],
+                      CT_max=spp_traits["CTmax"], 
+                      CT_min=spp_traits["CTmin"], 
                       T_pref=spp_traits["Tpref"],
                       # when is activity allowed
                       diurn=spp_traits["diurnal"],
@@ -175,55 +60,111 @@ gc()
                       T_RB_min=spp_traits["Tmerge"],
                       T_B_min=spp_traits["Tmerge"],
                       # microclimate port from parent environment
-                      nyears= micro$nyears,
-                      minshades = micro$minshade,
-                      maxshades = micro$maxshade,
-                      alpha_sub = (1 - micro$REFL),
-                      DEP = micro$DEP, KS = micro$KS, b = micro$BB,
-                      PE = micro$PE, metout = micro$metout, shadmet = micro$shadmet,
-                      soil = micro$soil, shadsoil = micro$shadsoil, soilmoist = micro$soilmoist,
-                      shadmoist = micro$shadmoist, humid = micro$humid, shadhumid = micro$shadhumid,
-                      soilpot = micro$soilpot, shadpot = micro$shadpot, tcond = micro$tcond,
-                      shadtcond = micro$shadtcond, rainfall = micro$RAINFALL,
-                                           preshr = rep(101325 * ((1 -
-                                                (0.0065 * as.numeric(micro$elev)/288))^(1/0.190284)),
-                                   nrow(micro$metout)), elev = as.numeric(micro$elev),
-                      longitude = as.numeric(micro$longlat[1]),
-                      latitude = as.numeric(micro$longlat[2]))
-
+                      nyears= micro$nyears, 
+                      minshades = micro$minshade, 
+                      maxshades = micro$maxshade, 
+                      alpha_sub = (1 - micro$REFL), 
+                      DEP = micro$DEP, KS = micro$KS, b = micro$BB, 
+                      PE = micro$PE, metout = micro$metout, shadmet = micro$shadmet, 
+                      soil = micro$soil, shadsoil = micro$shadsoil, soilmoist = micro$soilmoist, 
+                      shadmoist = micro$shadmoist, humid = micro$humid, shadhumid = micro$shadhumid, 
+                      soilpot = micro$soilpot, shadpot = micro$shadpot, tcond = micro$tcond, 
+                      shadtcond = micro$shadtcond, rainfall = micro$RAINFALL, 
+                      preshr = rep(101325 * ((1 - 
+                                                (0.0065 * as.numeric(micro$elev)/288))^(1/0.190284)), 
+                                   nrow(micro$metout)), elev = as.numeric(micro$elev), 
+                      longitude = as.numeric(micro$longlat[1]), 
+                      latitude = as.numeric(micro$longlat[2]),
+		      enberr=ifelse(spp == "Lithobates catesbeianus", .015, .055))
+  
 bodytemps<-ecto$environ %>% as_tibble() %>%
-  mutate(WT=as.numeric(spp_traits["CTmax"])-TC) %>%
-  group_by(YEAR, DOY) %>%
+  mutate(WT=as.numeric(spp_traits["CTmax"])-TC) %>% 
+  group_by(YEAR, DOY) %>% 
   summarize(activity0=sum(ACT == 0),
          activity1=sum(ACT == 1),
          activity2=sum(ACT == 2),
          shadeMean=round(mean(SHADE),2),
          across(c(WT,TC,TA,TSUB, TSKY, DEP), list(mean=mean, max=max, min=min)),
          nHoursAboveCTmax=sum(WT < 0),
-         species=spp,
-         rowid=rw) %>%
-         mutate(across(c(ends_with('mean'), ends_with('min'), ends_with('max')), ~round(.x, 3)),
-         .groups='drop') %>%
+	 species=spp,
+	 rowid=rw, .groups='drop') %>%
+	 mutate(across(c(ends_with('mean'), ends_with('min'), ends_with('max')), ~round(.x, 3))) %>%
   group_by(species, rowid) %>%
   summarize(nDays=sum(nHoursAboveCTmax != 0),
-        meannH=mean(nHoursAboveCTmax),
-        WT_ptmin=min(WT_min),
-        WT_min25=quantile(WT_min, .25),
-        WT_25=quantile(WT_mean, .25),
-        WT_75=quantile(WT_mean, .75),
-        WT_ptmean=mean(WT_mean),
-        nhrF=sum(activity2), .groups='drop')
+  	meannH=mean(nHoursAboveCTmax), 
+  	WT_ptmin=min(WT_min),
+  	WT_min25=quantile(WT_min, .25),
+  	WT_25=quantile(WT_mean, .25),
+  	WT_75=quantile(WT_mean, .75),
+  	WT_ptmean=mean(WT_mean),
+  	nhrF=sum(activity2), .groups='drop')
 ecto_out<-bind_rows(ecto_out, bodytemps)
+gc()
 }
 }
-#write.csv(ecto_out, paste0(PATH_out, rw, "_bodytemps.csv"), row.names=F)
+write.csv(ecto_out, paste0(PATH_out, rw, "_bodytemps_sum.csv"), row.names=F)
+}
+return(ecto_out)
 }
 
-results<-mclapply(pts_df[sample(1:nrow(pts_df),1000),]$rowid, anuranMNMs, mc.cores = 40) # outputs list from each rep of function I think
-save_this <- do.call('rbind', results)
-# save the outputs of this code
-write.table(save_this, file = paste0("models_run", Sys.Date(), ".csv"),
-            sep = ",", append = TRUE, row.names = FALSE)
+eval_fork <- function(row, timeout=720){
+
+  #this limit must always be higher than the timeout on the fork!
+  setTimeLimit(timeout+5);      
+  starttime <- Sys.time()
+
+  #dispatch based on method
+  ##NOTE!!!!! Due to a bug in mcparallel, we cannot use silent=TRUE for now.
+  myfork<-parallel::mcparallel(anuranMNMs(row))
+
+  #wait max n seconds for a result.
+  myresult <- parallel::mccollect(myfork, wait=FALSE, timeout=timeout)
+  
+  enddtime <-  Sys.time()
+  totaltime <- as.numeric(enddtime - starttime, units='secs')  
+  #try to avoid bug/race condition where mccollect returns null without waiting full timeout.
+  #see https://github.com/jeroenooms/opencpu/issues/131
+  #waits for max another 2 seconds if proc looks dead 
+  while(is.null(myresult) && totaltime < timeout && totaltime < 2) {
+     Sys.sleep(.1)
+     enddtime <- Sys.time();
+     totaltime <- as.numeric(enddtime - starttime, units="secs")
+     myresult <- parallel::mccollect(myfork, wait = FALSE, timeout = timeout);
+  }
+
+  #kill fork after collect has returned
+  tools::pskill(myfork$pid, tools::SIGKILL);    
+  tools::pskill(-1 * myfork$pid, tools::SIGKILL);  
+
+  #clean up:
+  parallel::mccollect(myfork, wait=FALSE);
+
+  #timeout?
+  if(is.null(myresult)){
+    stop("R call did not return within ", timeout, " seconds. Terminating process.", call.=FALSE);      
+  }
+
+  #move this to distinguish between timeout and NULL returns
+  myresult <- myresult[[1]];
+
+  #reset timer
+  setTimeLimit();     
+
+  #forks don't throw errors themselves
+  if(inherits(myresult,"try-error")){
+    #stop(myresult, call.=FALSE);
+    stop(attr(myresult, "condition"));
+  }
+
+  #send the buffered response
+  return(myresult);  
+  
+}
+
+
+mclapply(pts_df$rowid[1:npts],
+		  eval_fork,
+		  mc.cores=coress)
 ```
 
 I automate this code with the following SLURM job submission script. 
@@ -231,9 +172,9 @@ I automate this code with the following SLURM job submission script.
 ```{r slurm script, eval=F}
 #!/bin/bash
 #SBATCH -N 1
-#SBATCH --ntasks=40
-#SBATCH --mem-per-cpu=2000
-#SBATCH -t 30:00
+#SBATCH --ntasks=75
+#SBATCH --mem-per-cpu=1900
+#SBATCH -t 55;00:00
 #SBATCH -J avoid_mem_error
 #SBATCH -p normal_q
 #SBATCH --account=
@@ -268,9 +209,50 @@ echo "============================="
 
 echo "Running predictor setup step..."
 echo "============================="
-singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript AnuranMNMParallel.r
+singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
 echo "============================="
 echo " "
 ```
 
-?write.table
+And then I use the code below to collate and summarize all the completed models. 
+
+```{r building body temps, eval=F}
+# set up the libraries
+.libPaths(.libPaths()[3:1])
+library(tidyverse)
+
+micro_out<-NULL
+for(i in list.files('results/', pattern='microloc', full.names = T)){
+  micro_out<-bind_rows(micro_out,
+                      read.csv(i))
+}
+write.csv(micro_out, 'microclimate_info.csv', row.names=F)
+
+clim_out<-NULL
+for(i in list.files('results/', pattern='ppt_dat', full.names=T)){
+  clim_out<-bind_rows(clim_out,
+		      read.csv(i))
+}
+write.csv(clim_out, 'climate_data.csv', row.names=F)
+
+ecto_out<-NULL
+for(i in list.files('results', pattern='bodytemps_sum.csv', full.names = T)){
+  ecto_out<-bind_rows(ecto_out,
+                      read.csv(i))
+}
+
+write.csv(ecto_out, 'summarized_bodytemps.csv', row.names=F)
+
+cat(paste('missing bt', micro_out$rowid[!(micro_out$rowid %in% unique(ecto_out$rowid))], '\n'))
+write.table(paste0('results/', micro_out$rowid[!(micro_out$rowid %in% unique(ecto_out$rowid))],'_microloc.csv'), 'missingbt.txt', sep="/t", quote=F, row.names=F)
+cat(paste('missing micro', ecto_out$rowid[!(ecto_out$rowid %in% unique(micro_out$rowid))], '\n'))
+```
+
+Below code is for error checking:
+
+```{r}
+micro_out <- read.csv('intermediate_results/microclimate_info_221216.csv')
+micro_out %>%
+  ggplot()+geom_histogram(aes(x=err), binwidth = .5)+
+  scale_x_continuous('Microclimate Error Tolerance', label=seq(1.5:6))
+```
