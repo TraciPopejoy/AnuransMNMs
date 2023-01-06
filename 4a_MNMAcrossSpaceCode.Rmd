@@ -9,24 +9,101 @@ Below is the code I use to run many mechanistic niche models across the Southeas
 
 
 ```{r anuran parallel script, eval=F}
-# bash script to programatically run Mechanistic Niche models ----
-# by Traci DuBose, last edited 11/22/2022
-
 #interact -A usgs_rcs -t 2:00:00 -p normal_q -N 1 -c 2 # code to start an interactive session
 #module load containers/singularity 
 #singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
 
-    tRainfall=sum(micro$RAINFALL),
-	   aRainfall=sum(micro$RAINFALL)/(length(micro$dates2)/365),
+# R script to programatically run Mechanistic Niche models ----
+# by Traci DuBose, last edited 11/22/2022
+# set up the libraries
+.libPaths(.libPaths()[3:1])
+#library(devtools)
+#devtools::install_github('mrke/NicheMapR')
+#devtools::install_github('ilyamaclean/microclima')
+library(tidyverse); library(maps);  library(sf); library(parallel); library(hoardr); library(stars); library(NicheMapR)
+# DATA INPUTS ------------
+coress <- 10
+ npts<- 10
+# paths
+PATH <- "./" #arc
+PATH_out <- paste0(PATH, "results/") # where to save the output
+# traits used to parameterize the ectotherm function
+traits <- read.csv(paste0(PATH, "inputed_traits.csv")) %>%
+  mutate(across(c('s.fossorial', 's.arboreal', 'nocturnal','diurnal','crepuscular'),
+                as.numeric)) 
+focal_spp<-traits %>% pull(species) %>% unique() # focal species to run models for
+# completed points
+pts_done <- read.csv('summarized_bodytemps.csv') %>% pull(rowid)
+# points at which to run the microclimate model
+pts_df<-read.csv(paste0(PATH, "points_to_run.csv")) %>%
+          filter(!(rowid %in% pts_done),
+                 grepl(', ', spp_all)) 
+#npts<-nrow(pts_df)
+# model parameters
+start_date="01/01/2012"
+end_date="31/12/2020"
+cat('\ndata loaded\n')
+# FUNCTION WHICH WE USE TO PARALLALIZE CODE ----------
+# it should run the microclimate model and then an ectotherm model for each species found in that grid
+anuranMNMs<-function(rw, write.micro.out=F){
+  pt<-pts_df[pts_df$rowid==rw,]
+  cat(paste0(rw, ' row number \n', round(pt[1,1],3), '  ',round(pt[1,2], 3),'\n'))
+  ecto_out <- NULL
+  ERR <- 1.5
+  micro <- micro_ncep(loc = c(as.numeric(pt[1,1])-+0.00001,as.numeric(pt[1,2])+0.00001),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
+                    # soilgrids=1,
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR, 
+                     run.gads=2)
+  gc()
+  while(min(micro$metout[,1])==0 & ERR <= 6){
+        cat("model crashed, trying a higher error tolerance \n")
+        ERR <- ERR + 0.5
+                # rerun the microclimate with slightly higher error tolerance allowed
+        micro <- micro_ncep(loc = c(as.numeric(pt[1,1])-0.00001,as.numeric(pt[1,2])+0.00001),
+                     dstart = start_date, dfinish = end_date,
+                     DEP = c(0, 2.5,  5,  10,  15,  20,  30,  50, 75,  100), #cm
+                     minshade = 0, maxshade = 90, runshade=1,
+                    #soilgrids=1,
+                     spatial='./ncep_data/ncep_data',
+                     dem.res=1000, # requested resolution DEM from elevatr in meters
+                     Usrhyt = 0.01, # local height for organism
+                     ERR = ERR,
+                     run.gads=2)
+        gc()
+cat(paste('row',rw,'tried error ', ERR, 'and it worked ==', min(micro$metout[,1])!=0, '\n'))
+      }
+if(min(micro$metout[,1])==0){
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           notes='broken model',
+           err=ERR) 
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+        }else{
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
+        }else{
+mc.df<-data.frame(rowid=rw,
+           lat=micro$longlat[2],
+           long=micro$longlat[1],
+           tRainfall=sum(micro$RAINFALL),
+           aRainfall=sum(micro$RAINFALL)/(length(micro$dates2)/365),
            evel=micro$elev,
            slope=micro$SLOPE,
            aspect=micro$ASPECT,
-	   err=ERR) %>% 
+           err=ERR) %>% 
 mutate(across(-c(rowid, lat, long), ~round(.x, 3))) 
 write.csv(mc.df, paste0(PATH_out, rw,'_microloc.csv'), row.names=F)
 bind_cols(ppt=micro$RAINFALL, dat=micro$dates2) %>% mutate(year=substr(dat,1,4)) %>% 
-	group_by(year) %>% 
-	summarize(mppt=mean(ppt), sdppt=sd(ppt), tppt=sum(ppt), .groups='drop') %>%
+        group_by(year) %>% 
+        summarize(mppt=mean(ppt), sdppt=sd(ppt), tppt=sum(ppt), .groups='drop') %>%
 left_join(micro$metout %>%
 	     bind_cols(dat=micro$dates) %>%
 	     mutate(year=substr(dat, 1,4)) %>% 
@@ -167,7 +244,7 @@ mclapply(pts_df$rowid[1:npts],
 		  mc.cores=coress)
 ```
 
-I automate this code with the following SLURM job submission script. 
+I automate this code with the following SLURM job submission script. To speed things up, I 
 
 ```{r slurm script, eval=F}
 #!/bin/bash
@@ -246,6 +323,66 @@ write.csv(ecto_out, 'summarized_bodytemps.csv', row.names=F)
 cat(paste('missing bt', micro_out$rowid[!(micro_out$rowid %in% unique(ecto_out$rowid))], '\n'))
 write.table(paste0('results/', micro_out$rowid[!(micro_out$rowid %in% unique(ecto_out$rowid))],'_microloc.csv'), 'missingbt.txt', sep="/t", quote=F, row.names=F)
 cat(paste('missing micro', ecto_out$rowid[!(ecto_out$rowid %in% unique(micro_out$rowid))], '\n'))
+
+# Outputs  in a raster ---------------
+library(sf); library(maps);library(stars)
+# study extent
+se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina',
+                           'north carolina', 'virginia', 'alabama', 'tennessee'),
+                 fill=T, plot=F)) %>%
+  st_make_valid() %>%
+  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+# create raster of study extent
+se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster of 1x1 kilometers
+  st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
+  rowid_to_column() # add an id column
+
+focal_spp <- unique(ecto_out$species)
+# convert the ecto_out to a wide dataframe so that each attribute is the result of a single species
+ecto_wt<-ecto_out %>% select(rowid, species, WT_ptmin) %>%
+  pivot_wider(names_from=species, values_from=WT_ptmin)
+#ecto_25<-ecto_out %>% select(rowid, species, WT_min25) %>%
+#          pivot_wider(names_from=species, values_from=WT_min25)
+
+# join the spatial polygon with the ectotherm output
+ecto_se<-se_r %>% right_join(ecto_wt, by='rowid') %>%
+  left_join(ecto_out %>% group_by(rowid) %>%
+              summarize(n_spp=n(),
+                        mean_WTmin=round(mean(WT_ptmin),4),
+                        sd_WTmin=round(sd(WT_ptmin),4),
+                        mean_WT25=round(mean(WT_min25),4),
+                        sd_WT25=round(sd(WT_min25),4)),
+            by='rowid')
+all_res<-NULL
+for(spp in focal_spp){
+  tettt <- ecto_se %>% select(rowid, ID, all_of(spp)) %>%
+    rename(value=all_of(spp)) %>%
+    filter(!is.na(value)) 
+  resul <- tettt %>% as_tibble() %>%
+    summarize(species=spp,
+              mean_WTmin=mean(value),
+              below0=sum(value < 0),
+              below2=sum(value < 2),
+              n=n()) %>%
+    bind_cols(area=tettt %>% st_union() %>% st_area(.))
+  all_res<- bind_rows(all_res, resul)
+}
+all_res
+write.csv(all_res, 'anuranMNMsensitivity.csv')
+
+ecto_rast <- ecto_se %>% st_rasterize()
+
+# export as rds
+saveRDS(ecto_rast, "WT_stars.rds")
+
+# plot most abundant species
+pdf("q_WT.pdf")
+
+# Creating a plot
+plot(ecto_rast[15], breaks='equal')
+
+# Closing the graphical device
+dev.off()
 ```
 
 Below code is for error checking:

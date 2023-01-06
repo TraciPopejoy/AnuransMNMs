@@ -28,6 +28,21 @@ ecto_out <- read.csv('intermediate_results/summarized_bodytemps_221216.csv')
 micro_out <- read.csv('intermediate_results/microclimate_info_221216.csv')
 ```
 
+```{r}
+pts2run<-read.csv('intermediate_results/points_ran_2022-11-17.csv')
+nrow(pts2run)
+pts2run %>% filter(rowid == '10592')
+
+library(ncdf4)
+nc = nc_open("global_micro_climate/soilw.mon.ltm.v2.nc")
+precip = list()
+precip$x = ncvar_get(nc, "longitude")
+precip$y = ncvar_get(nc, "latitude")
+
+precip$z = ncvar_get(nc, "z", start=c(1))
+?ncvar_get
+```
+
 
 This gives us data for `r length(unique(ecto_out$rowid))` randomly sampled, but occupied points across our study region. This is `r round(length(unique(ecto_out$rowid))/256994, 4)*100`% of the 256,994 occupied grid cells (1 km resolution).
 

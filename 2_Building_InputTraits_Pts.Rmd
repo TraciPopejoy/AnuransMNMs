@@ -151,6 +151,8 @@ So we removed `r nrows(new`
 ```{r}
 nrow(new_trait_mean)-nrow(trait_filt)
 anti_join(new_trait_mean, trait_filt) %>% ungroup() %>% count(species)
+trait_filt %>% ungroup() %>% count(species) %>% summarize(mean(n), sd(n))
+new_trait_mean
 ```
 
 
@@ -207,6 +209,14 @@ So when multiple traits are available for our focal species, we only use traits 
 ```{r}
 trait_used<-both_trait_types %>%
   mutate(trait_value=ifelse(is.na(mean_val), value, round(mean_val,3))) %>%
+  select(species, traitName, trait_value) %>%
+  pivot_wider(names_from=traitName, values_from=trait_value)
+both_trait_types %>%
+  filter(!(traitName %in% c('nocturnal', 'diurnal', 'crepuscular', 'arrhythmic'))) %>%
+  mutate(keptint=case_when(is.na(mean_val)& !is.na(value)~'inter', 
+                           !is.na(mean_val) ~ 'se')) %>%
+  filter(!is.na(keptint)) %>% count(keptint)
+%>%
   select(species, traitName, trait_value) %>%
   pivot_wider(names_from=traitName, values_from=trait_value)
 ```
@@ -313,6 +323,18 @@ imp_results %>%
   theme_classic() +
   theme(legend.position='top',
         axis.text.x = element_text(angle=20, hjust=.87, vjust=1))
+imp_results %>% 
+  left_join(taxa_table, by=c('species'='Tree.name')) %>%
+  filter(species.y %in% focal_spp) %>% count(Imputed)
+imp_results %>% 
+  left_join(taxa_table, by=c('species'='Tree.name')) %>%
+  filter(species.y %in% focal_spp) %>% count(species, Imputed) %>%
+  pivot_wider(names_from = Imputed, values_from = n) %>%
+  mutate(per=Imputed / c(Imputed + Literature)*100) %>%
+  summarize(summary(per))
+imp_results %>% 
+  left_join(taxa_table, by=c('species'='Tree.name')) %>% 
+  filter(species.y %in% focal_spp) %>% count(family, genus)
 ```
 
 ```{r species discussion, echo=F}
@@ -654,7 +676,7 @@ The below code is by Mike Kearney and was reported in the NicheMapR google group
 ```{r download ncep, eval=F}
 # Code by Mike Kearney!
 library(curl)
-years <- seq(2015,2018)
+years <- seq(2010, 2011)
 vars <- c('tmax.2m.gauss.','dswrf.sfc.gauss.', 'prate.sfc.gauss.', 'vwnd.10m.gauss.',
           'uwnd.10m.gauss.', 'air.2m.gauss.', 'tmin.2m.gauss.', 'shum.2m.gauss.',
           'pres.sfc.gauss.', 'dlwrf.sfc.gauss.', 'ulwrf.sfc.gauss.', 'tcdc.eatm.gauss.')

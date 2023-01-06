@@ -271,6 +271,13 @@ pts_df<-pt_locs %>%
 ```
 
 ```{r}
+pts_df %>% 
+  left_join(pts, by='rowid') %>%
+  ungroup() %>% count(species)
+nrow(pts)
+```
+ NOTE::: maybe figure out minimum value of soil grid???
+```{r}
 pt.bt.df<-left_join(bt %>% select(-X), clim %>% mutate(YEAR=year - 2012 + 1), by=c('rowid','YEAR'))
 ```
 
