@@ -10,7 +10,19 @@ library(Rphylopars); library(ggtree); library(treeplyr); library(phytools)
 library(sf); library(geodata);library(stars)
 library(nlme)
 knitr::opts_chunk$set(echo = FALSE)
-focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
+# species with robust trait availability and compared in MNM paper
+mnm_spp<- c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
+# species identified as interesting for the comparision analysis
+com_spp<- c( "Acris gryllus", "Acris crepitans",
+               "Anaxyrus terrestris", "Anaxyrus fowleri", "Anaxyrus quercicus", 
+               "Dryophytes avivoca",  "Dryophytes andersonii", "Dryophytes cinereus", 
+               "Dryophytes chrysoscelis", "Dryophytes femoralis", "Dryophytes gratiosus",
+               "Dryophytes squirellus", "Gastrophryne carolinensis", "Lithobates sevosus",
+               "Lithobates capito", "Lithobates grylio", "Lithobates okaloosae", 
+               "Lithobates heckscheri", "Lithobates sphenocephalus", "Lithobates areolatus", 
+               "Lithobates virgatipes", "Pseudacris ornata", "Pseudacris feriarum", 
+             "Pseudacris brachyphona", "Pseudacris fouquettei","Scaphiopus holbrookii")
+focal_spp<-unique( c(mnm_spp, com_spp))
 ```
 
 \tableofcontents
@@ -21,7 +33,7 @@ focal_spp<-c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americ
 
 #### Bias in our trait dataset
 
-In 0_Species_Selection.Rmd, we identified species that have trait data for atleast 3 of the following traits: CTmax, CTmin, Tpref, and Tmerge. 
+In 0_Species_Selection.Rmd, we identified species that have trait data for atleast 3 of the following traits: CTmax, CTmin, Tpref, and Tmerge. This Rmd also identified traits for the species within our species list for the climate change vulnerability comparison paper. 
 
 ```{r atraiu2, echo=F, warning=F, message=F}
 trait_db<-read_csv('ATraiU 2.0/ATraiU2_summary_values_2022SEPT.csv', show_col_types = F)
@@ -39,28 +51,32 @@ caption='Missing Trait Data among focal species',
 col.names = c('Species', 'N missing Traits', 'Missing Data %'))
 ```
 
-## Anuran Phylogeny
-
-Using the phylogeny from Jetz & Pyron 2019, we can impute traits for the species we have trait information for. To improve the fit of this imputation, for our focal species, we are recalculating means that remove traits from far localities (e.g., Canada). 
+To improve the fit of this imputation, for our focal species, we are recalculating means that remove traits from far localities (e.g., Canada). 
 
 ```{r}
-new_trait_mean<-read.csv('ATraiU 2.0/ATraiU2_full_2022SEPT.csv') %>%  filter(species %in% focal_spp, 
-         lifeStage %in% c('adult','unknown'), 
-         traitName != 'Activity', 
-         !is.na(verbatimLocality)) %>%
-  group_by(species, traitName) %>% mutate(n=n()) %>%
+# pull in the USGS data release full database
+new_trait_mean<-read.csv('G:/Shared drives/GCC Vulnerability Scaling Project/3_Physiological Trait Database/Data Release/ATraiU2_full_2022SEPT.csv') %>% 
+  filter(species %in% focal_spp, #only species in our species list
+         lifeStage %in% c('adult','unknown'), # only adults
+         traitName != 'Activity', # activity is categorical and can't be inputed using the method we want
+         !is.na(verbatimLocality)) %>% # needs to have a known location to be excluded
+  # count how many trait values are available per species & trait type
+  group_by(species, traitName) %>% mutate(n=n()) %>% 
   filter(n != 1) # if only one value, won't exclude
 #new_trait_mean$verbatimLocality %>% unique()
+
 trait_filt <- new_trait_mean %>% 
+  # I looked though the traits by hand and removed those I thought too far away
   filter(!(verbatimLocality %in% c("James River and Big Sioux River, South Dakota",
-                                 "44.57229Â°N, 97.02486Â°W", 
-                                 "45 34'57â€\u009dN 64, 58'37â€\u009dW",
-                                 "44Â°33'N, 78Â°33'W", "45Â°35'N, 78Â°30'W",
-                                 "44Â°50'N, 68Â°35'W", 
+                                 "44.57229°N, 97.02486°W", 
+                                 "45°34'57\"N 64°58'37\"W",
+                                 "44°33'N, 78°33'W", "45°35'N, 78°30'W",
+                                 "44°50'N, 68°35'W", 
                                  "Meadow Valley Wash between Carp & Elgin, Lincoln County, Nevada",
                                  "Andes of Veneszuela",
                                  "NAD 27: UTM Zone 17: N5127200m, E304000m")), 
          !grepl('rhode island', verbatimLocality),
+         !grepl('Rhode Island', verbatimLocality),
           !grepl('Northeast US', verbatimLocality),
          !grepl('Massachusetts', verbatimLocality),
          !grepl('Connecticut', verbatimLocality),
@@ -73,24 +89,30 @@ trait_filt <- new_trait_mean %>%
            !grepl("Ontario", verbatimLocality),
            !grepl("Quebec", verbatimLocality),
          !grepl("Ottawa", verbatimLocality),
+         !grepl("Vancouver Island", verbatimLocality),
            !grepl("British Columbia", verbatimLocality))
-trait_restrict <- trait_filt %>%  group_by(species, traitName) %>%
-  summarize(mean_val=mean(as.numeric(traitValue)), sd_val=sd(as.numeric(traitValue)))
+# save the traits that are used to recalculate interspecific level traits
+write.csv(trait_filt, 'intermediate_results/regional_interspecific_traits.csv', row.names = F)
 ```
 
-```{r}
+```{r all trait location plot, echo=F}
+# usa map
 usa<-st_as_sf(map('state', fill=T, plot=F)) %>% st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
-se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
+# original spatial extent of what we consider the se
+se_orig<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
                            'north carolina', 'virginia', 'alabama', 'tennessee'), 
                  fill=T, plot=F)) %>% 
   st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
-```
+# new spatial extent based on ecological boundaries
+se<-read_sf('C:/Users/Owner/Documents/GISfile/WBD_National_GDB/WBD_National_GDB.gdb',layer='WBDHU2') %>%
+  filter(huc2 %in% c('03','06','08'))
 
-```{r, echo=F}
+# fixing trait locations so that they will 
+# join with the se object through the ID column and can be plotted 
 trait_filtL<- trait_filt %>%
-  mutate(ID=case_when(grepl('Texas', verbatimLocality) ~ 'texas',
+  mutate(ID=case_when(grepl('Texas', verbatimLocality)|grepl('TX', verbatimLocality) ~ 'texas',
                       grepl('Missouri', verbatimLocality) ~ 'missouri',
                       grepl('Illinois', verbatimLocality) | 
                         grepl('IL', verbatimLocality) ~ 'illinois',
@@ -101,7 +123,6 @@ trait_filtL<- trait_filt %>%
                       grepl('Michigan', verbatimLocality)~'michigan', 
                       grepl('New York', verbatimLocality) |
                         grepl('NY', verbatimLocality) ~ 'new york',
-                     
                       grepl('Indiana', verbatimLocality)~'indiana',
                       grepl('Pennsylvania', verbatimLocality)~'pennsylvania',
                       grepl('Arkansas', verbatimLocality)~'arkansas',
@@ -113,8 +134,9 @@ trait_filtL<- trait_filt %>%
                       grepl('Oklahoma', verbatimLocality)|
                         verbatimLocality == 'UTM zone 15; 233905E, 4047104N, NAD 83' ~ 'oklahoma',
                       verbatimLocality %in% c("41 17' N, 83 37' W", "41 17' N, 83 13' W",
-                                              "40 37' N, 83 17' W") ~ 'ohio',
-                      verbatimLocality == "44 28'45\"N, 87 37'15\" W" ~ 'wisconsin',
+                                              "40 37' N, 83 17' W", "41° 17' N, 83° 37' W",
+                                              "41° 17' N, 83° 13' W", "40° 37' N, 83° 17' W") ~ 'ohio',
+                      verbatimLocality == "44°28'45\"N, 87°37'15\" W" ~ 'wisconsin',
                       verbatimLocality == "N 0695928 and W 4482919, zone 15 using NAD27 CONUS map datum in UTM" ~ 'illinois',
                       grepl('Alabama', verbatimLocality)~'alabama',
                          grepl('Florida', verbatimLocality)|
@@ -126,7 +148,9 @@ trait_filtL<- trait_filt %>%
                          grepl('South Carolina', verbatimLocality) ~ 'south carolina', 
                          grepl('Tennessee', verbatimLocality) ~ 'tennessee',
                          grepl('Virginia', verbatimLocality) ~ 'virginia',
-         T ~ 'study area')) 
+         T ~ 'study area')) %>%
+  filter(species %in% mnm_spp)
+# identify states that had traits that were removed from our trait value pool
 usa_traits<-left_join(usa, trait_filtL %>%
                         distinct(traitName, ID) %>%
                         group_by(ID) %>% summarize(n_traits=length(unique(traitName))),
@@ -135,28 +159,17 @@ usa_traits<-left_join(usa, trait_filtL %>%
                                             "massachusetts", "connecticut","rhode island"), 
                            0, n_traits))) 
 sf::sf_use_s2(FALSE)
-library(ggspatial)
 usa_traits %>%
   ggplot()+
   geom_sf(aes(fill=n_traits))+
   geom_sf(data=se %>% st_make_valid() %>% st_union() %>% st_transform(st_crs(usa)) , fill=NA, size=1.5, color='black')+
   scale_fill_manual('N traits\nused', values=c(met.brewer('Benedictus', 10)[c(1, 6:10)]))+
   theme_void()
-ggsave('results/FigS2_traits_removed.jpg', width=4, height=2.75)
+ggsave('results/FigS2_1_traits_removed.jpg', width=4, height=2.75)
 sf::sf_use_s2(TRUE)
 ```
 
-So we removed `r nrows(new`
-
-```{r}
-nrow(new_trait_mean)-nrow(trait_filt)
-anti_join(new_trait_mean, trait_filt) %>% ungroup() %>% count(species)
-trait_filt %>% ungroup() %>% count(species) %>% summarize(mean(n), sd(n))
-new_trait_mean
-```
-
-
-I did this based on the localities' state location distance from the southeast region.
+In the first pass, I decided the state-based cutoff but wanted to quantify how consistent this was across regions. I consider my edge states as Mississippi, Tennessee, and Virginia and calculated the diestance between the centroids of those edge states and the states that had trait values I kept. I found I shouldn't include some of the Northeast states I included, and adjusted the list above. Excluded states and their summed distance from our edge states' centroids.
 
 ```{r}
 edge_sts<-usa_traits %>% filter(ID %in% c("mississippi", "tennessee", "virginia")) %>% 
@@ -167,29 +180,71 @@ dist.mat<-usa_traits %>% filter(!is.na(n_traits),
   st_distance(edge_sts)
 colnames(dist.mat)<-edge_sts$ID
 rownames(dist.mat)<-usa_traits %>% filter(!is.na(n_traits), !(ID %in% se$ID)) %>% pull(ID)
-dist.mat
-```
-
-```{r}
 rowMeans(dist.mat)[rowMeans(dist.mat)>1000]
 ```
 
-```{r}
-edge_sts2<-se %>% st_make_valid() %>% st_union()
-dm2<-usa_traits %>% filter(!is.na(n_traits),
-                      !(ID %in% se$ID)) %>%
-  st_distance(edge_sts2)
-rownames(dm2)<-usa_traits %>% filter(!is.na(n_traits), !(ID %in% se$ID)) %>% pull(ID)
-dm2[order(dm2[,1]),]
+## Identify which species to use to investigate intraspecific trait variation 
+
+[still need to describe this decision process]
+
+```{r explore multiple trait avail}
+trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge')) %>%
+  mutate(n=n()) %>% arrange(desc(n)) %>%
+  select(species, traitName, traitValue, verbatimLocality, traitSource) %>% 
+  arrange(traitName, species) %>% View()
+trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge'), species %in% mnm_spp) %>%
+  count() %>% pivot_wider(names_from=traitName, values_from=n) %>%
+  mutate(ntotal=sum(c(Tmerge, Tpref, CTmax), na.rm=T))
+trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge'),
+                      species %in% c('Acris blanchardi','Anaxyrus americanus',
+                                     'Pseudacris crucifer')) %>% 
+  select(species, traitName, traitValue, verbatimLocality, traitSource) %>% 
+  arrange(species, verbatimLocality) %>% View()
 ```
 
+## Outputting interspecific trait values 
 
-```{r compare trait values, fig.width=6.5, fig.height=3, echo=F}
+```{r combine trait tables, warning=F, message=F}
+# recalculate the trait value to use in our models 
+# based only on trait values closer to the SE
+trait_restrict <- trait_filt %>%  group_by(species, traitName) %>%
+  dplyr::summarize(mean_val=case_when(traitName == 'CTmax' ~ max(as.numeric(traitValue)),
+                               traitName == 'CTmin' ~ min(as.numeric(traitValue)),
+                               T ~ mean(as.numeric(traitValue))), 
+            sd_val=sd(as.numeric(traitValue)), .groups='drop') %>%
+  distinct(species, traitName, mean_val, sd_val)
+# join the ATraiU-TaDs summarized trait values to the local summarized trait values
 both_trait_types<-trait_db %>% select(-refIDs) %>%
   pivot_longer(-species, names_to = "traitName") %>%
-  left_join(trait_restrict, by = c("species", "traitName"))
+  left_join(trait_restrict, by = c("species", "traitName")) %>%
+# upon inspection of G. carolinensis's high Tmerge, we should use min Tmerge
+  mutate(value=ifelse(grepl('carolin', species) & traitName == 'Tmerge', 22.0, value))
+
+# replace ATraiU-TaDs summarized trait values if local trait values available
+trait_used<-both_trait_types %>%
+  mutate(trait_value=ifelse(is.na(mean_val), value, round(mean_val,3))) %>%
+  # change datafraome to wide instead of long
+  select(species, traitName, trait_value) %>% 
+  pivot_wider(names_from=traitName, values_from=trait_value)
+```
+```{r kept trait table, echo=F}
+kable(both_trait_types %>%
+  filter(!(traitName %in% c('nocturnal', 'diurnal', 'crepuscular', 'arrhythmic')),
+         species %in% focal_spp) %>%
+  mutate(`Species List`=case_when(species %in% mnm_spp & species %in% com_spp ~ 'both papers',
+                            species %in% mnm_spp ~ 'mnm paper',
+                            species %in% com_spp ~ 'comparison paper'),
+         keptint=case_when(is.na(mean_val)& !is.na(value)~'ATraiU-TaDS', 
+                           !is.na(mean_val) ~ 'SE recalc',
+                           T ~ 'missing')) %>% 
+    count(`Species List`,keptint) %>% 
+    pivot_wider(names_from = keptint, values_from=n),
+  caption='Types of trait values used as inputs to our MNM models')
+```
+```{r compare trait values, fig.width=6.5, fig.height=3, echo=F}
 both_trait_types %>%
-  filter(!is.na(mean_val))  %>%
+  filter(!is.na(mean_val),
+         traitName != 'Tbask', !grepl('Tforage', traitName))  %>%
   mutate(trait_dif=value-mean_val) %>%
   ggplot()+
   geom_point(aes(y=species, x=trait_dif))+
@@ -202,24 +257,31 @@ both_trait_types %>%
         axis.title.y=element_blank())
 ```
 
-Based on this quick comparison, we can see some unexpected differences between interspecific trait values calculated for the species entire range and interspecific trait values calculated just using trait values measured within a mean of 1000km of the edge our study region. Mean CTmax is higher when calculated when using the entire range, despite the SE US region having hotter summers. Mean CTmin is higher in the SE, likely because of its milder winters. Mass is mostly consistent except for much (~25%) larger L. catesbeianus (American bullfrog). Preferred temperatures are higher when we restrict values to the SE and emergence temperatures are later, both of which might be expected because of hotter temperatures and more resources (thus less need to compete for resources by emerging sooner).   
+Based on this quick comparison, we can see expected differences between interspecific trait values calculated for the species entire range and interspecific trait values calculated just using trait values measured within a mean of 1000km of the edge our study region. An undexpected difference is mean CTmax for L. catesbeianus is higher when calculated when using the entire range, despite the SE US region having hotter summers. Mean CTmin is higher in the SE, likely because of its milder winters. Mass is mostly consistent except for much (~25%) larger L. catesbeianus (American bullfrog). Preferred temperatures are higher when we restrict values to the SE and emergence temperatures are later, both of which might be expected because of hotter temperatures and more resources (thus less need to compete for resources by emerging sooner).   
 
-So when multiple traits are available for our focal species, we only use traits within a mean of 1000km of the edge states of our study region. When only one trait is available for a species and trait, we use that trait. We did not restrict the trait values for non-focal SE species (which are used in the phylogenetic imputation process) because those species might have large ranges and are already likely trait limited.
+So when multiple traits are available for our focal species, we only use traits within a mean of 1000km of the edge states of our study region. When only one trait is available for a species and trait, we use that trait. We did not restrict the trait values for non-focal SE species (which are used in the phylogenetic imputation process) because those species might have large ranges and are already likely trait limited. Below is some code to describe the amount of traits removed from ATraiU-TaDS.
 
-```{r}
-trait_used<-both_trait_types %>%
-  mutate(trait_value=ifelse(is.na(mean_val), value, round(mean_val,3))) %>%
-  select(species, traitName, trait_value) %>%
-  pivot_wider(names_from=traitName, values_from=trait_value)
-both_trait_types %>%
-  filter(!(traitName %in% c('nocturnal', 'diurnal', 'crepuscular', 'arrhythmic'))) %>%
-  mutate(keptint=case_when(is.na(mean_val)& !is.na(value)~'inter', 
-                           !is.na(mean_val) ~ 'se')) %>%
-  filter(!is.na(keptint)) %>% count(keptint)
-%>%
-  select(species, traitName, trait_value) %>%
-  pivot_wider(names_from=traitName, values_from=trait_value)
+```{r trait removal results code}
+ # number of traits removed
+nrow(new_trait_mean %>% filter(species %in% mnm_spp)) - 
+  nrow(trait_filt %>% filter(species %in% mnm_spp))
+# number of species with count of traits removed
+anti_join(new_trait_mean, trait_filt,
+          by = c("species", "traitName", "lifeStage", "sex", "traitValue", "traitUnit",
+"traitVariation", "traitVariationType", "traitAcclimation", "verbatimLocality", "traitSource",
+"Notes", "traitEvidenceCategory", "canonicalName", "scientificName", "family", "genus",
+"usageKey", "refID", "outlier", "itisTSN", "n")) %>% ungroup() %>%
+  filter(species %in% mnm_spp) %>% count(species)
+trait_filt %>% ungroup() %>% 
+  filter(species %in% mnm_spp) %>% count(species) %>%
+  # average trait values that went into the recalculated number
+  summarize(mean(n), sd(n), sum(n))
 ```
+
+
+## Anuran Phylogeny
+
+Now that we have interspecific traits that are closer to our study extent, we can impute any missing trait values uUsing the phylogeny from Jetz & Pyron 2019. Based on the missing trait data of our focal species, we should either use Rphylopars or BHPMF + phylogeny to impute the missing trait data. I am going to use all the trait data available across the entire Southeast US anuran species group (n = 37 species) to impute the data using Rphylopars.
 
 ```{r phylogeny, echo = F, fig.height=4.5}
 taxa_table<-trait_used %>% dplyr::select(species) %>%
@@ -236,7 +298,6 @@ taxa_table<-trait_used %>% dplyr::select(species) %>%
                              T~species),
          Tree.name=sub(' ','_',Tree.name.syn)) %>%
   filter(species != 'Lithobates kauffeldi')
-
 # import phylogeny from Jetz and Pyron 2018
 tree_orig <- read.tree(file = "input_data/amph_shl_new_Consensus_7238.tre") 
 tree.pruned <- keep.tip(phy = tree_orig, 
@@ -245,33 +306,45 @@ taxa_table$node<-nodeid(tree.pruned, taxa_table$Tree.name)
 #plot(tree.pruned, font=2)
 ```
 
-```{r plot the phylo tree, echo=F, warning=F, message=F}
+Using the trait_used dataframe (which selected regional traits over interspecific summarized values if available), we build a trait dataframe to do our inputation on.
+
+```{r build trait table for phylo}
 trait.df<-trait_used %>%
-  mutate(category=ifelse(species %in% focal_spp, 'focal', 'SE')) %>%
+  select(-Tforage_optim) %>%
+  mutate(category=case_when(species %in% mnm_spp & species %in% com_spp ~ 'both papers',
+                            species %in% mnm_spp ~ 'mnm paper',
+                            species %in% com_spp ~ 'comparison paper',
+                            T ~ 'rare in SE')) %>%
   right_join(taxa_table, by='species') %>%
             mutate(tree.lab=paste0(substr(Tree.name,1,1), '. ',
                                    sub('.*\\_','',Tree.name))) %>%
   replace_na(list(n=0, comp=0))
+#head(trait.df)
+```
+```{r plot the phylo tree, echo=F, warning=F, message=F}
 trait_tree<-left_join(tree.pruned, trait.df, by='node')
 ggtree(trait_tree, aes(color=category, label=tree.lab), size=3)+ 
   geom_tiplab(as_ylab=T)
 ```
 
-So based on the missing trait data of our focal species, we should either use Rphylopars or BHPMF + phylogeny to impute the missing trait data. I am going to use all the trait data available across the entire Southeast US anuran species group (n = 37 species) to impute the data using Rphylopars.
 
 ## Use Rphylopars to imput continuous trait data
 
-```{r trait mat, warning=F, message=F, echo=F}
-trait.mat<-trait.df[, c(17, 6:10, 12:14)] %>%
+We first make sure we are only including continuous traits in resulting dataframe and then get it in the format requested by phylopars. 
+
+```{r trait mat, warning=F, message=F}
+names(trait.df[,c(16, 6:13)])
+trait.mat<-trait.df[, c(16, 6:13)] %>%
   rename('species'='Tree.name')
 ```
+
 We use the following code to impute the traits using the *Rphylopars* package. 
 - estimates phylogenetic and phenotypic variance-covariance matrices 
 - assumes phenotypic covariance is equivalent among species
 - uses a Browning motion model of evolution
 Essentially is a maximum likelihood frequentist way to impute traits
 
-```{r results, echo=T, out.width='60%'}
+```{r phylogenetic models, echo=T}
 p_BM <- phylopars(trait_data = data.frame(trait.mat), tree = tree.pruned,
                   phylo_correlated=F, model='BM')
 p_lamda <- phylopars(trait_data = data.frame(trait.mat), tree=tree.pruned,
@@ -292,14 +365,14 @@ kable(data.frame(model=c('lambda','Brownian motion','OU'),
 ```
 
 ```{r}
-summary(p_lamda)
+summary(p_OU)
 ```
 
 ```{r results graph,  fig.height=4, echo=F}
 #results!
-imp_results <- p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
+imp_results <- p_OU$anc_recon[1:length(tree.pruned$tip.label),] %>%
   as_tibble() %>%
-  bind_cols(species=rownames(p_lamda$anc_recon[1:length(tree.pruned$tip.label),])) %>%
+  bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
   left_join(trait.mat, by='species')%>%
   pivot_longer(-species) %>%
   mutate(variable=gsub('.y','', gsub('\\.x','', name)),
@@ -323,18 +396,16 @@ imp_results %>%
   theme_classic() +
   theme(legend.position='top',
         axis.text.x = element_text(angle=20, hjust=.87, vjust=1))
-imp_results %>% 
-  left_join(taxa_table, by=c('species'='Tree.name')) %>%
-  filter(species.y %in% focal_spp) %>% count(Imputed)
-imp_results %>% 
+```
+
+
+```{r inputation results table, echo=F}
+kable(imp_results %>% 
   left_join(taxa_table, by=c('species'='Tree.name')) %>%
   filter(species.y %in% focal_spp) %>% count(species, Imputed) %>%
   pivot_wider(names_from = Imputed, values_from = n) %>%
-  mutate(per=Imputed / c(Imputed + Literature)*100) %>%
-  summarize(summary(per))
-imp_results %>% 
-  left_join(taxa_table, by=c('species'='Tree.name')) %>% 
-  filter(species.y %in% focal_spp) %>% count(family, genus)
+  mutate(per=Imputed / c(Imputed + Literature)*100),
+  caption='The number of MNM traits either imputed or from the literature, and the percentabe of imputed traits for each species')
 ```
 
 ```{r species discussion, echo=F}
@@ -387,7 +458,7 @@ Below, I build two related trait datasets that incorporate traits from this tria
 ```{r}
 atraiu<-read_csv('C:/Users/Owner/Downloads/ATraiU/ATraiU_summary_values_2020AUG.csv', 
                  show_col_types = F)
-used_traits<-imp_results %>% #imputed thermoregulation traits
+used_traits1<-imp_results %>% #imputed thermoregulation traits
   select(species, variable, Yes, Imputed) %>%
   group_by(species) %>%
   # tally imputed traits to keep track
@@ -398,7 +469,7 @@ used_traits<-imp_results %>% #imputed thermoregulation traits
   # join in taxonomic information
   rename(Tree.name=species) %>% left_join(taxa_table, by='Tree.name') %>%
   # filter to only the focal species
-  filter(species %in% focal_spp) %>% ungroup() %>%
+  filter(species %in% c(focal_spp, "Lithobates sevosus")) %>% ungroup() %>%
   select(-node, -Tree.name.syn, -Tree.name) %>%
   # bring in ATraiU for burrowing & climbing
   left_join(atraiu %>% select(family, latin_name, s.fossorial, s.arboreal),
@@ -411,15 +482,20 @@ used_traits<-imp_results %>% #imputed thermoregulation traits
   select(family, species,imp.trait, n.imp, s.fossorial, s.arboreal, 
          nocturnal, diurnal, crepuscular, everything()) %>%
   # estimating activity traits for Lithobates areolatus
-  mutate(nocturnal=case_when(species=='Lithobates areolatus'~ 1, T~nocturnal),
-         diurnal=case_when(species == 'Lithobates areolatus'~0, T~diurnal),
-         crepuscular = case_when(species == 'Lithobates areolatus' ~ 0, T~crepuscular),
+  mutate(nocturnal=case_when(species %in% c('Lithobates areolatus', "Pseudacris brachyphona",
+                                            "Pseudacris fouquettei") ~ 1, T~nocturnal),
+         diurnal=case_when(species %in% c("Pseudacris brachyphona", "Pseudacris fouquettei") ~ 0,
+                           species == 'Lithobates areolatus' ~ 1,
+                           T~diurnal),
+         crepuscular = case_when(species %in% c("Pseudacris brachyphona", "Pseudacris fouquettei") ~ 0,
+                                 species == 'Lithobates areolatus' ~ 1,
+                                 T~crepuscular),
          s.fossorial = as.numeric(s.fossorial),
-         s.arboreal = as.numeric(s.arboreal)) 
-write.csv(used_traits, 'input_data/inputed_physio_traits_11152022.csv', row.names=F)
+         s.arboreal = as.numeric(s.arboreal))
+write.csv(used_traits1, 'input_data/inputed_physio_traits_011923.csv', row.names=F)
 
 # writing out all imputed traits to explore options of expanding comparison species list 
-p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
+p_OU$anc_recon[1:length(tree.pruned$tip.label),] %>%
    as_tibble() %>%
   bind_cols(species=rownames(p_OU$anc_recon[1:length(tree.pruned$tip.label),])) %>%
   mutate(species=gsub('_',' ', species)) %>%
@@ -434,14 +510,18 @@ p_lamda$anc_recon[1:length(tree.pruned$tip.label),] %>%
               dplyr::select(species, nocturnal, diurnal, crepuscular) %>%
               mutate(across(-species, ~ifelse(.x > 0,1,0))), by='species') %>%
   # estimating activity traits for Lithobates areolatus
-  mutate(nocturnal=case_when(species=='Lithobates areolatus'~ 1, T~nocturnal),
-         diurnal=case_when(species == 'Lithobates areolatus'~0, T~diurnal),
-         crepuscular = case_when(species == 'Lithobates areolatus' ~ 0, T~crepuscular),
+  mutate(nocturnal=case_when(species %in% c('Lithobates areolatus', "Pseudacris brachyphona",
+                                            "Pseudacris fouquettei") ~ 1, T~nocturnal),
+         diurnal=case_when(species %in% c('Lithobates areolatus', "Pseudacris brachyphona",
+                                            "Pseudacris fouquettei") ~ 0, T~diurnal),
+         crepuscular = case_when(species %in% c('Lithobates areolatus', "Pseudacris brachyphona",
+                                            "Pseudacris fouquettei") ~ 0, T~crepuscular),
          s.fossorial = as.numeric(s.fossorial),
          s.arboreal = as.numeric(s.arboreal)) %>%
   # rearranging columns
   dplyr::select(species, everything()) %>%
-  write.csv('input_data/MNM_traits_SEspp.csv', row.names = F)
+  write.csv('input_data/MNM_traits_SEspp_011923.csv', row.names = F)
+#which(is.na(used_traits1), arr.ind=T)
 ```
 
 The figures below show the variation among taxa in major traits used in our mechanistic niche model. These interspecific traits, with variation in geographic location, will influence the outcomes of the MNMs. 
@@ -484,6 +564,22 @@ ggplot(plt.df, aes(x=family, y=Tpref, label=pltsp)) +
 rm(p_BM, p_lamda, p_OU, plt.df, 
    trait_filt, trait_restrict, trait.df, trait.mat,  trait_used, 
    usa_traits, usa,edge_sts, edge_sts2) #clean up space 
+```
+
+
+### Outputting Intraspecific Variance Trait Table
+
+Now that the trait is decided and the species identified, I will output the subset species trait values to run though the function created in 4a_MNMAcrossSpaceCode.Rmd.
+
+```{r}
+trait_filt %>% filter(traitName == 'Tpref',
+                      species %in% c('Acris blanchardi','Anaxyrus americanus',
+                                     'Pseudacris crucifer')) %>% 
+  select(species, traitName, traitValue, verbatimLocality, traitSource) %>% 
+  arrange(species, verbatimLocality) %>% ungroup() %>%
+  select(-traitName) %>% rename(Tpref=traitValue) %>%
+  left_join(used_traits1 %>% select(-Tpref, -family, -imp.trait, -n.imp), by='species') %>%
+  write.csv('input_data/intraspecific_variation_subset.csv', row.names = F)
 ```
 
 # Exploring accounting for Acclimation using data from ATraiU-TaDS
@@ -765,6 +861,8 @@ plot_grid(microtest %>%
     theme_bw())
 ```
 
+Downloading terra data for the climate extrapolations can be found here: https://groups.google.com/g/nichemapr/c/DC8dI5-0GXc/m/zF8fL357BQAJ
+
 # Building points at which to run the MNMs
 
 Now that I have the species pool, I identify points to run the models across a species range. The code chunk below creates a grid across the southeastern US that we will use to get the points we will use as inputs into the microclimate model. I will populate a grid at the resolution of our microclimate model on the high power computer (not enough memory on my laptop). First, I need to build range estimates to populate this grid. I do this by using the point occurrences from the RCS analysis, removing points outside 100km of the species' IUCN range (when available), adding a 5km buffer, and taking the union of all points to get an area of occupancy for each frog species. 
@@ -773,33 +871,95 @@ Now that I have the species pool, I identify points to run the models across a s
 library(tidyverse); library(sf); library(maps);library(stars)
 # Build Points at which to run MNMs ------------
 # study extent
-se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
-                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
-                 fill=T, plot=F)) %>%
-  st_make_valid() %>%
-  st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
+se <- readRDS('b_RegionalRCS/spatial_extent.rds') %>%
+  st_as_sf()
+st_crs(se)
+
 # create raster of study extent
 se_r<-st_rasterize(se, dx=1, dy=1) %>% #turn into a raster of 1x1 kilometers
   st_as_sf(as_points = FALSE, merge = FALSE) %>%  #turn into a polygon
   rowid_to_column() # add an id column
+st_area(se_r[1,])
+cat('raster created\n')
 
 se_grid<-NULL
-focal_spp<-read.csv('AnuranMNMs/inputed_physio_traits.csv') %>% pull(species)
-for(s in focal_spp){
-  spp_aoo<-read_sf('RCS_resub/L48_1km', layer=s) %>%
-    st_buffer(4) 
+focal_spp<-read.csv('AnuranMNMs/inputed_physio_traits_011923.csv') %>% pull(species)
+focal_spp
+for(s in focal_spp[focal_spp != 'Lithobates sevosus']){
+  spp_aoo<-read_sf('/home/tracidubose/RCS_resub/L48_1km', layer=s) %>%
+    st_buffer(4)
   spp_grid<-st_join(se_r, spp_aoo) %>% filter(!is.na(FID)) %>%
     mutate(species=s)
   se_grid <- bind_rows(se_grid, spp_grid)
   print(s)
 }
 
+# adding some points for L. sevosus
+ls_aoo <- read_sf('RCS_Anuran_input/ANURA') %>%
+  filter(binomial=='Lithobates sevosus',
+         grepl('Extant', legend)) %>%
+  st_transform(st_crs(spp_aoo))
+head(ls_aoo)
+se_grid %>% as_tibble() %>% count(species) %>% arrange(n) %>% slice(1)
+# because the n grid should still be less thant the smallest aoo in other species, 
+# not adding any buffer
+spp_grid <- st_join(se_r, ls_aoo %>% select(binomial, yrcompiled)) %>% filter(!is.na(yrcompiled)) %>%
+  mutate(species = 'Lithobates sevosus') %>%
+  select(-yrcompiled, -binomial)
+se_grid <-bind_rows(se_grid, spp_grid)
+st_area(se_grid[1,])
+se_grid %>% as_tibble() %>% count(species) %>%
+  write_csv('AnuranMNMs/grid_count_species.csv')
+
 # identify all species in a single grid
 se_grid_spp <- se_grid %>% as_tibble() %>% # avoiding summarize on sf
-  group_by(rowid) %>% 
+  group_by(rowid) %>%
   summarize(spp_all=paste(unique(species), collapse=', '),
             n_spp=n())
 nrow(se_grid_spp)
+mnm_spp <- c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus', 
+             'Lithobates sylvaticus', 'Lithobates palustris', 
+    'Pseudacris crucifer', 'Dryophytes versicolor', 'Acris blanchardi', 'Dryophytes chrysoscelis', 
+    'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
+mnm_grid_spp <- se_grid %>% as_tibble() %>% # avoiding summarize on sf
+  filter(species %in% mnm_spp) %>%
+  group_by(rowid) %>%
+  summarize(spp_all=paste(unique(species), collapse=', '),
+            n_spp=n())
+
+com_spp <- c("Acris gryllus", "Acris crepitans",
+    "Anaxyrus terrestris", "Anaxyrus fowleri", "Anaxyrus quercicus", 
+    "Dryophytes avivoca",  "Dryophytes andersonii", "Dryophytes cinereus", 
+    "Dryophytes chrysoscelis", "Dryophytes femoralis", "Dryophytes gratiosus",
+    "Dryophytes squirellus",
+    "Gastrophryne carolinensis",
+    "Lithobates capito", "Lithobates grylio", "Lithobates okaloosae", 
+    "Lithobates heckscheri", "Lithobates sphenocephalus", "Lithobates areolatus", 
+    "Lithobates virgatipes", "Lithobates sevosus"
+    "Pseudacris ornata", "Pseudacris feriarum", "Pseudacris brachyphona",
+    "Pseudacris fouquettei",
+    "Scaphiopus holbrookii")
+com_grid_sp <- se_grid %>% as_tibble() %>% # avoiding summarize on sf
+  filter(species %in% com_spp) %>%
+  group_by(rowid) %>%
+  summarize(spp_all=paste(unique(species), collapse=', '),
+            n_spp=n())
+print(paste(com_grid_sp %>% filter(grepl('sevos', spp_all)), '\n'))
+library(cowplot)
+plot_grid(mnm_grid_spp %>% ggplot()+geom_histogram(aes(x=n_spp), binwidth = 1)+
+            geom_text(stat="bin", aes(x=n_spp, label=..count.., y=..count..+5100), binwidth=1)+
+            theme_classic()+scale_y_continuous('Count Grid Cells', labels = scales::comma)+
+            scale_x_continuous('n Species', expand = c(0,0))+
+            ggtitle('MNM species list'),
+          com_grid_sp %>% ggplot()+geom_histogram(aes(x=n_spp), binwidth = 1)+
+            geom_text(stat="bin", aes(x=n_spp, label=..count.., y=..count..+5100), binwidth=1)+
+            theme_classic()+scale_y_continuous('Count Grid Cells', labels = scales::comma)+
+            scale_x_continuous('n Species', expand = c(0,0))+
+            ggtitle('CCVA Comparison species list'),
+          ncol=1)
+ggsave('AnuranMNMs/count_of_gridcells.jpg', width=6.5, height=4)
+
+
 # get the centroid of each grid cell as a point
 pts<-se_r %>% st_centroid() %>%
   left_join(se_grid_spp, by='rowid') %>%
@@ -813,20 +973,24 @@ se_r %>%
   geom_sf(aes(fill=n_spp, color=n_spp))+
   scale_color_viridis_c('N\nspecies', aesthetics=c('fill','color'))+
   theme_bw()
+ggsave('AnuranMNMs/n_total_spp_raster.jpg', width = 5, height = 5)
 # convert the grid of points to a dataframe for NicheMapR
 # locational input into the microclimate function below
 se_pts_df <- pts %>%
   st_transform(st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
-  st_coordinates() %>% 
-  bind_cols(rowid = pts$rowid, spp_all=pts$spp_all)
-write.csv(se_pts_df, paste0('points_ran_', format(Sys.Date()), '.csv'), row.names = F)
+  st_coordinates() %>%
+  bind_cols(rowid = pts$rowid, spp_all=pts$spp_all) 
+
+se_pts_df %>% left_join(mnm_grid_spp %>% rename(mnm_spp=spp_all, mnm_n_spp=n_spp), by='rowid') %>%
+  left_join(com_grid_sp %>% rename(com_spp=spp_all, com_n_spp=n_spp), by='rowid') %>%
+write.csv(paste0('AnuranMNMs/points_ran_', format(Sys.Date()), '.csv'), row.names = F)
 ```
 
 To investigate the amount of a species' latitudinal gradient that is represented in our region, we rasterize species IUCN range polygons and our 5km buffered estimates of species occurrence at a .5 decimal degree spatial resolution and plot the resulting latitudinal distribution. This figure is found within the supplement of our paper. 
 
 ```{r, fig.height=2.7, fig.width=6.5}
 # bring in the IUCN range shapefile to filter point occurrences
-iucn_all<-read_sf('../ANURA') %>% 
+iucn_all <- read_sf('../ANURA') %>% 
   filter(binomial %in% focal_spp, # only keep species we are interested in
          !grepl('Extinct',legend)) %>% # only keep ranges that are extant or introduced
   group_by(binomial) %>% summarize()
@@ -858,7 +1022,7 @@ se_dl <- se %>%
 
 # then we pull in each species' occurrence points from GBIF & HerpMapper
 anuran_pts<-NULL
-for(s in focal_spp){
+for(s in focal_spp[!grepl('sevos', focal_spp)]){
   anuran_pts<-bind_rows(anuran_pts,
                         read.csv(paste0('../National-RCS/data/occ_data/',s,'_20210330.csv')) %>% 
                         # only keep this information about the occurrence point
@@ -881,6 +1045,7 @@ latlist_iucn %>%
             mutate(dist='IUCN range') %>%
             bind_rows(latlist_occs %>% 
                         mutate(dist='occurrences')) %>%
+  filter(species %in% mnm_spp) %>%
   left_join(rcs %>% distinct(family, species), by='species') %>%
    mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
   ggplot()+
@@ -896,15 +1061,43 @@ latlist_iucn %>%
                   aesthetics=c('color','fill'))+
   theme_classic()+theme(axis.title=element_text(size=9),
                         axis.text=element_text(size=9),
-                        legend.position = 'bottom', 
+                        legend.position = c(.8,.1),
+                        legend.background =  element_rect(color='black',fill=NA),
                         legend.title=element_text(size=8),
                         legend.text = element_text(size=8),
-                        legend.margin=margin(t=-10),
                         strip.text=element_text(face='italic'),
                         strip.background = element_blank())
   #guides(fill=guide_legend(nrow=3, size=.5, alpha=1))
-ggsave('results/FigS3_propdist_lat.jpg', height=4.5, width=6.5)
-rm(iucn_all, iucnrng, latlist_occs, na_r)
+ggsave('results/FigS2_2_propdist_lat.jpg', height=4.5, width=6.5)
+latlist_iucn %>%
+            mutate(dist='IUCN range') %>%
+            bind_rows(latlist_occs %>% 
+                        mutate(dist='occurrences')) %>%
+  filter(species %in% com_spp)%>%
+  #left_join(rcs %>% distinct(family, species), by='species') %>%
+   mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
+  ggplot()+
+  geom_density(aes(x=Y, fill=dist, color=dist), alpha=0.8)+
+  geom_vline(xintercept=c(min.lat,max.lat))+
+  scale_x_continuous('Latitude')+
+  scale_y_continuous('Range Probability Density', labels=function(x)round(x, digits=2))+
+  #scale_color_manual('species', values=c(met.brewer('Renoir'), 'grey'),
+  #                   aesthetics = c('fill','color')) +
+  #facet_grid(dist~family)+
+  facet_wrap(~pltsp, ncol=4, scales = 'free_y') +
+  scale_fill_grey('Source of Range', labels=c('IUCN range','5km buffered point occurrences'),
+                  aesthetics=c('color','fill'))+
+  theme_classic()+theme(axis.title=element_text(size=9),
+                        axis.text=element_text(size=9),
+                        legend.position = c(.8,.01),
+                        legend.background=element_rect(color='black', fill=NA),
+                        legend.title=element_text(size=8),
+                        legend.text = element_text(size=8),
+                        strip.text=element_text(face='italic', size=9),
+                        strip.background = element_blank())
+  #guides(fill=guide_legend(nrow=3, size=.5, alpha=1))
+ggsave('../CompareAnuranCCVA/results/FigS1_propdist_lat.jpg', height=6.5, width=6.5)
+rm(iucn_all, latlist_occs, na_r)
 ```
 ```{r percent dist in SE, echo=F}
 kable(latlist_iucn %>%

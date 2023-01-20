@@ -5,13 +5,58 @@ date: "11/22/2022"
 output: pdf_document
 ---
 
-Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code and save myself time. I run into an odd FORTRAN error and used the last answer on this [StackXchange question](https://stackoverflow.com/questions/7891073/time-out-an-r-command-via-something-like-try) to time out the process and prevent the core from hanging until the end of the SLURM job. 
+Below is the code I use to run many mechanistic niche models across the Southeastern United States region on the High Power Computer. I run it on the HPC to parallelize the code. Below is the bash script submitted to SLURM to generate MNM models. It calls two R scripts, one to run models and one to collate results. Both are described below. Because errors occur in the compilation of the microclimate model (described below), I often have to run this script multiple times to get through large chunks of points. 
 
+```{r slurm script, eval=F}
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks=60
+#SBATCH --mem-per-cpu=2000
+#SBATCH -t 20:00:00
+#SBATCH -J avoid_mem_error
+#SBATCH -p normal_q
+#SBATCH --account=
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --mail-user=
+
+# info: -N=nodes
+#ntasks=cores
+#mem-per-cpu=memory requested (note, it's multiplied by ntasks, so if you ask for 2 cores, and 80 mem-per-cpu, you'll get 160 G)
+#-t = time requested
+#-J = job name
+#-p = partitiion
+
+cd /fastscratch/tracidubose/AnuranMNMs #project folder
+
+module load containers/singularity # this line is necessary
+echo "Modules loaded:" #these lines are just extra until L34
+module list
+echo " "
+echo "Running from:"
+pwd
+echo "============================="
+#singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript build_bodytemp_summa$
+echo "Running MNMs"
+echo "============================="
+singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
+echo "============================="
+echo " "
+echo "Consolidating Results "
+singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript build_bodytemp_summary_df.r
+echo "============================="
+echo "built bodytemp summary too"
+```
+
+I run into an odd FORTRAN error and used the last answer on this [StackXchange question](https://stackoverflow.com/questions/7891073/time-out-an-r-command-via-something-like-try) to time out the process and prevent the core from hanging until the end of the SLURM job. It takes approximately 3 minutes to run a microclimate model ones and 20 seconds to run an ectotherm model. So I set the core time out to 10 minutes to be safe: 2 microclimate models and generous time for 15 species.
 
 ```{r anuran parallel script, eval=F}
 #interact -A usgs_rcs -t 2:00:00 -p normal_q -N 1 -c 2 # code to start an interactive session
 #module load containers/singularity 
 #singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
+
+# TerraClimate_tmax_2012.nc
+
+#terra_climate_plus2C/TerraClimate_2c_tmax_2012.nc
 
 # R script to programatically run Mechanistic Niche models ----
 # by Traci DuBose, last edited 11/22/2022
@@ -242,53 +287,6 @@ eval_fork <- function(row, timeout=720){
 mclapply(pts_df$rowid[1:npts],
 		  eval_fork,
 		  mc.cores=coress)
-```
-
-I automate this code with the following SLURM job submission script. To speed things up, I 
-
-```{r slurm script, eval=F}
-#!/bin/bash
-#SBATCH -N 1
-#SBATCH --ntasks=75
-#SBATCH --mem-per-cpu=1900
-#SBATCH -t 55;00:00
-#SBATCH -J avoid_mem_error
-#SBATCH -p normal_q
-#SBATCH --account=
-#SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=
-
-# info: -N=nodes
-#ntasks=cores
-#mem-per-cpu=memory requested (note, it's multiplied by ntasks, so if you ask for 2 cores, and 80 mem-per-cpu, you'll get 160 G)
-#-t = time requested
-#-J = job name
-#-p = partitiion
-#you don't need to mail requests if you don't want to get notifications about the job running, you could just delete
-
-cd /fastscratch/tracidubose/AnuranMNMs #project folder
-
-# make sure the correct files are used
-#cp /home/tracidubose/AnuranMNMs/inputed_physio_traits_11152022.csv inputed_traits.csv
-#cp /home/tracidubose/AnuranMNMs/points_ran_2022-11-17.csv points_to_run.csv
-
-module load containers/singularity # this line is necessary
-echo "Modules loaded:" #these lines are just extra until L34
-module list
-
-echo " "
-echo "============================="
-echo "Running from:"
-pwd
-echo " "
-echo "============================="
-
-
-echo "Running predictor setup step..."
-echo "============================="
-singularity exec --bind=/fastscratch/tracidubose/AnuranMNMs /projects/arcsingularity/ood-rstudio141717-geospatial_4.1.1.sif Rscript pairedMCE_Rscript.r
-echo "============================="
-echo " "
 ```
 
 And then I use the code below to collate and summarize all the completed models. 
