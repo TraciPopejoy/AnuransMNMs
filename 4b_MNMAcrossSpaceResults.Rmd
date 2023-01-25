@@ -25,9 +25,9 @@ mnm_spp <- c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americ
     'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis', 'Lithobates areolatus')
 pts2run<-read.csv('intermediate_results/points_ran_2023-01-10.csv')
 rcs<-read.csv('../National-RCS/Anuran_RCS_and_components_20220908.csv')
-ecto_out <- read.csv('intermediate_results/summarized_bodytemps_011223.csv') %>%
+ecto_out <- read.csv('intermediate_results/summarized_bodytemps_230124.csv') %>%
   filter(species %in% mnm_spp)
-micro_out <- read.csv('intermediate_results/microclimate_info_011223.csv')
+micro_out <- read.csv('intermediate_results/microclimate_info_230124.csv')
 ```
 
 This gives us data for `r length(unique(ecto_out$rowid))` randomly sampled, but occupied points across our study region. This is `r round(length(unique(ecto_out$rowid))/256994, 4)*100`% of the 256,994 occupied grid cells (1 km resolution).
@@ -85,6 +85,9 @@ So we can first visualize each species result across space with the plot below.
 test.data<-ecto_out %>% 
   left_join(micro_out, by='rowid') %>%
    mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) 
+```
+```{r eval=F}
+# need to run this on the super computer instead
 test.data %>%
   st_as_sf(coords=c('long','lat'),
            crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
@@ -99,7 +102,8 @@ test.data %>%
 ggsave('results/FigS2_tsm_results.jpg', width=6.5, height=6.5)
 ```
 
-We already see some differences among species with G. carolinensis generally having large warming tolerance and L. palustris having a smaller warming tolerance. 
+We already see some differences among species with G. carolinensis generally having large warming tolerance and L. palustris having a smaller warming tolerance.
+REMEMBER TO TRY RIDGE PLOTS INSTEAD OF POINTS!
 
 ```{r boxplots across space, fig.width=3.5, fig.height=4}
 wtord<-test.data %>% group_by(species) %>% 
@@ -120,6 +124,13 @@ traits.df<-read.csv('input_data/inputed_physio_traits_011923.csv')  %>%
   mutate(spF=factor(species, levels=rev(wtord))) %>%
   left_join(ecto_out %>% count(species) %>% rename(AOO=n), by='species')
 
+wt.sum.df<-test.data %>% group_by(species) %>% 
+  summarize(medWT=median(WT_ptmin),
+            WTmin2=quantile(WT_ptmin, .025),
+            WTmin97=quantile(WT_ptmin, .975),
+            nRows=n()) %>%
+  mutate(spF=factor(species, levels=rev(wtord)))
+library(cowplot)
 plot_grid(
 test.data %>% group_by(species) %>% 
   summarize(medWT=median(WT_ptmin),
@@ -143,9 +154,10 @@ test.data %>% group_by(species) %>%
         legend.position=c(.85,.5)),
 traits.df %>%
   select(spF, s.fossorial, CTmax, AOO, Tpref, Tmerge) %>%
+  rename(fossorial=s.fossorial) %>%
   mutate(across(c(CTmax, AOO, Tpref, Tmerge), scale)) %>%
   pivot_longer(-spF) %>%
-  mutate(traitF=factor(name, levels=c('AOO','s.fossorial','CTmax','Tpref','Tmerge'))) %>%
+  mutate(traitF=factor(name, levels=c('AOO','fossorial','CTmax','Tpref','Tmerge'))) %>%
 ggplot()+
   geom_tile(aes(x=traitF, y=spF, fill=value))+
   scale_x_discrete('Traits')+
@@ -158,6 +170,27 @@ ggplot()+
   scale_fill_gradient2('Relative\nTrait\nValue'),
 rel_widths = c(.7,.3), align = 'h')
 ggsave('results/Fig2_fancy_rank_thermalsensitivity.jpg', width=6, height=3.5)
+```
+
+
+```{r}
+install.packages('ggridges')
+library(ggridges)
+test.data %>%
+  select(species, WT_ptmin, WT_min25) %>%
+  pivot_longer(-species) %>%
+  mutate(spF=factor(species, levels=rev(wtord))) %>%
+  ggplot()+
+  geom_density_ridges(aes(x=value, y=spF, fill=name), alpha=0.6)+
+  scale_fill_grey(name='Point-based\nQuantification', labels=c('25th quantile','minimum'))+
+  scale_x_continuous('Warming Tolerance', labels = tmplab, expand=c(0,0))+
+  theme_classic()+
+  theme(axis.title.y=element_blank(),
+        axis.line.y.left = element_blank(),axis.ticks.y = element_blank(),
+        axis.text.y=element_text(face='italic'),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8))
+ggsave('results/FigS2_3_wt_ridgelines.jpg', width=5, height=5)
 ```
 
  The most extreme we can spot are G. carolinensis and L. catesbeianus, which have flat lines. G. carolinensis buries and L. catesbeianus 
@@ -281,18 +314,57 @@ rng_cent
 rm(iucn)
 ```
 
+```{r}
+# to do: check model assumptions!
+test.mod<-lm(WT_ptmin~lat:species + species + 0, data=test.data)
+(mod.sum<-summary(test.mod))
+
+library(emmeans)
+m.est<-emtrends(test.mod, 'species', var='lat')
+mod.com.res<-pairs(m.est) %>% as_tibble()
+
+
+lat.rng<-test.data %>%
+  group_by(species) %>%
+  summarize(minlat=min(lat), maxlat=max(lat)) 
+ndf<-data.frame(species=rep(unique(lat.rng$species), 30)) %>% 
+  arrange(species) %>%
+  mutate(lat=rep(seq.int(min(lat.rng$minlat), max(lat.rng$maxlat), length.out=30),
+                 length(unique(lat.rng$species)))) %>%
+  left_join(lat.rng, by='species') %>%
+  filter( lat > minlat & lat < maxlat) 
+mod.pred<-cbind(ndf, predict(test.mod, newdata = ndf, interval='confidence')) %>%
+  left_join(test.data %>% distinct(species, pltsp), by='species')
+
+mod.out.df<-mod.sum$coefficients[,-c(3,4)] %>% as_tibble() %>%
+  bind_cols(parameter=rownames(mod.sum$coefficients)) %>%
+  mutate(species = gsub('species', '',
+                        gsub('lat:species','', parameter)),
+         type=ifelse(grepl('lat:species',parameter), 'slope','intercept')) %>%
+  select(-parameter) %>%
+  pivot_wider(names_from=type, values_from=c(Estimate, `Std. Error`))
+
+# output this data
+test.data %>% group_by(species) %>% 
+  summarize(medWT=median(WT_ptmin),
+            WTmin2=quantile(WT_ptmin, .025),
+            WTmin97=quantile(WT_ptmin, .975),
+            medWT25=median(WT_min25),
+            WTmin225=quantile(WT_min25, .025),
+            WTmin9725=quantile(WT_min25, .975),
+            nRows=n()) %>%
+  left_join(mod.out.df, by='species') %>%
+  write.csv('results/pt_wtmin_coeff_sum.csv', row.names = F)
+```
+
 
 ```{r lat wt plot with raw data, fig.width=3.5, fig.height=4, echo=F}
-test.data %>% 
-  #left_join(rng_cent, by='species') %>%
-  #mutate(lat_dif=lat-Y) %>%
+all.spp.p<-mod.pred %>% 
   ggplot()+
   geom_hline(yintercept=0, linetype='dashed')+
-  #geom_point(aes(x=lat, y=WT_ptmin, color=pltsp), alpha=.03)+
-  geom_smooth(aes(x=lat, y=WT_ptmin, color=pltsp), 
-              method='lm', formula= 'y~x', level=.0, size=1.5)+
-  geom_smooth(aes(x=lat, y=WT_ptmin, linetype=pltsp), 
-              method='lm', formula= 'y~x', level=.0, color='black', size=.5)+
+  geom_ribbon(aes(x=lat, ymin=lwr, ymax=upr, fill=pltsp), alpha=0.4)+
+  geom_line(aes(x=lat, y=fit, color=pltsp), size=1.3)+
+  geom_line(aes(x=lat, y=fit, linetype=pltsp), color='black', size=0.5)+
   scale_color_manual('species', 
                      values=c(met.brewer('Renoir')[1:6], 'lightgrey', met.brewer('Renoir')[7:12]),
                      aesthetics = c('fill','color')) +
@@ -304,12 +376,36 @@ test.data %>%
         legend.position = 'bottom', legend.direction = 'vertical',
         legend.text = element_text(size=8.5, face='italic'),
         legend.title=element_text(size=9),
-        legend.margin = margin(t=-4, l=-25),
-        plot.margin = margin(r=5, l=5))+
-  guides(fill=guide_legend(override.aes=list(alpha=0), ncol=3),
-         color=guide_legend(ncol=3))
+        #legend.margin = margin(t=-4, l=-25),
+        #plot.margin = margin(r=5, l=5)
+        )+
+  guides(fill=guide_legend(ncol=5),
+         color=guide_legend(ncol=5))
+intra.res<-read.csv('intermediate_results/intra_summarized_bodytemps.csv') %>%
+  filter(!is.na(loc)) %>% 
+  left_join(read.csv('intermediate_results/intra_microclimate_info.csv'), by='rowid')
 
-ggsave('results/Fig3_wt_lat.jpg', width=3.5, height=4)
+intrawt.p<-intra.res %>%
+  ggplot()+
+  geom_smooth(aes(x=lat, y=WT_ptmin, group=rn, color=species), method='lm', formula='y~x')+
+  geom_smooth(data=test.data %>% filter(species %in% unique(intra.res$species)),
+              aes(x=lat, y=WT_ptmin), color='black', method='lm', formula='y~x')+
+  facet_wrap(~species,)+
+  scale_color_manual('species', 
+                     values=c(met.brewer('Renoir')[c(2,1,8,11)]), #hand coded this
+                     aesthetics = c('fill','color')) +
+  scale_linetype_manual('species', values=c(2,1,1,2))+
+  scale_y_continuous('Warming Tolerance', labels = tmplab, )+
+  scale_x_continuous('Latitude', labels=latlab, breaks=c(30,33,36), expand=c(0.01,0.01))+
+  theme_classic()+
+  theme(axis.text.x=element_text(size=8),
+        legend.position = 'none',
+        strip.text=element_text(size=7.5),strip.background = element_blank(),
+        panel.background = element_rect(fill=NA, color='lightgrey'))
+lat.leg<-get_legend(all.spp.p)
+plot_grid(plot_grid(all.spp.p+theme(legend.position='none'), intrawt.p, labels='AUTO'),
+          lat.leg, rel_heights = c(.80,.20), ncol=1)
+ggsave('results/Fig3_ptwt_lat.jpg', width=6.5, height=5)
 ```
 
 ```{r}
@@ -336,17 +432,7 @@ test.data %>%
 
 ```
 
-```{r}
-# to do: check model assumptions!
-model.data<-test.data %>% filter(species != 'Lithobates areolatus')
-test.mod<-lm(WT_ptmin~lat:species + species + 0, data=model.data)
-(mod.sum<-summary(test.mod))
-mod.sum$coefficients
-library(emmeans)
-m.est<-emtrends(test.mod, 'species', var='lat')
-mod.com.res<-pairs(m.est) %>% as_tibble()
-?pairs
-```
+
 
 ```{r}
 mod.com.res %>% filter(p.value< 0.001)

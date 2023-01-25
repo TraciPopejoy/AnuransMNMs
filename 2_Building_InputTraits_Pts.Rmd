@@ -197,7 +197,7 @@ trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge'), species %in% m
   mutate(ntotal=sum(c(Tmerge, Tpref, CTmax), na.rm=T))
 trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge'),
                       species %in% c('Acris blanchardi','Anaxyrus americanus',
-                                     'Pseudacris crucifer')) %>% 
+                                     'Pseudacris crucifer', 'Lithobates clamitans')) %>% 
   select(species, traitName, traitValue, verbatimLocality, traitSource) %>% 
   arrange(species, verbatimLocality) %>% View()
 ```
@@ -574,12 +574,23 @@ Now that the trait is decided and the species identified, I will output the subs
 ```{r}
 trait_filt %>% filter(traitName == 'Tpref',
                       species %in% c('Acris blanchardi','Anaxyrus americanus',
-                                     'Pseudacris crucifer')) %>% 
+                                     'Pseudacris crucifer', 'Lithobates clamitans')) %>% 
   select(species, traitName, traitValue, verbatimLocality, traitSource) %>% 
   arrange(species, verbatimLocality) %>% ungroup() %>%
   select(-traitName) %>% rename(Tpref=traitValue) %>%
   left_join(used_traits1 %>% select(-Tpref, -family, -imp.trait, -n.imp), by='species') %>%
   write.csv('input_data/intraspecific_variation_subset.csv', row.names = F)
+```
+
+```{r}
+trait_filt %>%
+  filter(traitName != 'Mass', !grepl('forage', traitName),
+         species %in% mnm_spp) %>%
+  group_by(traitName, species) %>%
+  filter(traitValue == max(traitValue)|traitValue == min(traitValue)) %>%
+  arrange(species, traitName)
+used_traits1 %>%
+  filter(species %in% c('Dryophytes chrysoscelis','Lithobates palustris','Lithobates sylvaticus'))
 ```
 
 # Exploring accounting for Acclimation using data from ATraiU-TaDS
