@@ -1,0 +1,146 @@
+---
+title: "5_intraspecific variation"
+author: "Traci DuBose"
+date: "1/24/2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+in.traits<-read.csv('input_data/intraspecific_variation_subset_APPENDIX.csv')
+in.ecto<-read.csv('intermediate_results/intra_summarized_bodytemps_230127.csv')
+in.pts<-read.csv('intermediate_results/intra_microclimate_info_230127.csv')
+pts<-read.csv('intermediate_results/points_ran_2023-01-10.csv') 
+pts.res<-read.csv('results/pt_wtmin_coeff_sum.csv')
+head(in.ecto)
+pts_poss<-pts %>% select(X, Y, rowid, mnm_spp)%>%
+  separate(mnm_spp, into=paste0('sp', 1:13), sep=', ') %>%
+  pivot_longer(starts_with('sp')) %>%
+  filter(!is.na(value)) %>%
+  filter(value %in% unique(in.ecto$species)) %>%
+  distinct(rowid, value) %>%
+  count(value)
+```
+
+
+```{r}
+in.ecto %>%
+  distinct(species, rowid) %>%
+  left_join(in.pts, by='rowid') %>%
+  distinct(species, rowid, lat) %>%
+  group_by(species) %>%
+  summarize(n=n(),
+            minlat=min(lat), maxlat=max(lat)) %>%
+  left_join(pts_poss %>% rename(species=value, n_possible=n), 
+            by='species') %>%
+  mutate(per.pts=round(n/n_possible*100, 2))
+
+```
+
+```{r}
+ss.comp<-in.ecto %>%
+  filter(src %in% c('super','sensitive')) %>%
+  left_join(in.pts, by='rowid') %>%
+  distinct(species, rowid, lat, src, .keep_all = T) %>%
+  mutate(nsp=paste(src, species))
+ss.comp %>%
+  pivot_longer(cols=c('WT_min25','WT_ptmin')) %>%
+  ggplot()+
+  geom_hline(yintercept=0, color='grey')+
+  geom_point(aes(x=lat, y=value, color=src), alpha=0.02)+
+  stat_smooth(aes(x=lat, y=))
+  facet_grid(species~name)+
+  theme_classic()
+```
+
+```{r}
+# rank wt
+wtord <- pts.res %>% group_by(species) %>% 
+  arrange(medWT) %>% pull(species)
+library(cowplot)
+wtmin.plt<-ss.comp %>%
+   group_by(species, src) %>% 
+  summarize(medWT=median(WT_ptmin),
+            WTmin2=quantile(WT_ptmin, .025),
+            WTmin97=quantile(WT_ptmin, .975),
+            nRows=n(), .groups='drop') %>%
+  bind_rows(pts.res %>% mutate(src='interspecific')) %>%
+  mutate(spF=factor(species, levels=rev(wtord))) %>%
+  ggplot()+
+  geom_hline(yintercept=0, linetype='dashed', color='grey')+
+  geom_linerange(aes(x=spF, ymin=WTmin2, ymax=WTmin97, color=src),
+             position=position_dodge(width=.5))+
+  geom_point(aes(x=spF, y=medWT, color=src), size=1.7,
+             position=position_dodge(width=.5))+
+  scale_y_continuous('Minimum Warming Tolerance', labels = tmplab)+
+  scale_color_manual('Trait Type', values=c('black','blue','red'))+
+  theme_classic()+
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_text(face='italic'),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.position='bottom')+
+  coord_flip()
+src.legend<-get_legend(wtmin.plt)
+plot_grid(
+  plot_grid(wtmin.plt+theme(legend.position = 'none'),
+          ss.comp %>%
+   group_by(species, src) %>% 
+  summarize(medWT25=median(WT_min25),
+            WTmin225=quantile(WT_min25, .025),
+            WTmin9725=quantile(WT_min25, .975),
+            nRows=n(), .groups='drop') %>%
+  bind_rows(pts.res %>% mutate(src='interspecific')) %>%
+  mutate(spF=factor(species, levels=rev(wtord))) %>%
+  ggplot()+
+  geom_hline(yintercept=0, linetype='dashed', color='grey')+
+  geom_linerange(aes(x=spF, ymin=WTmin225, ymax=WTmin9725, color=src),
+             position=position_dodge(width=.5))+
+  geom_point(aes(x=spF, y=medWT25, color=src), size=1.7,
+             position=position_dodge(width=.5))+
+  scale_y_continuous('Minimum Warming Tolerance', labels = tmplab)+
+  scale_color_manual('Trait Type', values=c('black','blue','red'))+
+  theme_classic()+
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8),
+        legend.position='none')+
+  coord_flip(), labels='AUTO', rel_widths=c(.65, .35), align='h'),
+  src.legend, rel_heights = c(.99,.1), ncol=1)
+ggsave('results/FigS3_1_rankwarmingtolerance.jpg', width=6.5, height=4)
+```
+
+```{r}
+library(lme4)
+wtmin.mod<-lmer(WT_ptmin~lat:species + species + 0 + (1|src), data=ss.comp)
+(mod.sum<-summary(wtmin.mod))
+wtmin.pred<-cbind(ss.comp, fit=predict(wtmin.mod))
+ggplot(wtmin.pred)+
+  geom_point(aes(x=lat, y=WT_ptmin, color=src), alpha=0.02)+
+  geom_line(aes(x=lat, y=fit, color=src))+
+  facet_grid(~species)+
+  theme_classic()+
+  theme(legend.position='bottom')
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
