@@ -504,6 +504,73 @@ mod.results %>%
   facet_wrap(~quant.var, ncol=3)
 ```
 
+Below, I use regressions to investigate how much warming tolerance varies when the intraspecific trait used to build the MNM varies. Below the differences among the different MNMs are displayed, with difference calculated as the lowest Warming Tolerance estimate - all other warming tolerance estimates. 
+
+```{r intra dif plot, echo=F}
+intra.traits<-read.csv('input_data/intraspecific_variation_subset_APPENDIX.csv') %>%
+  filter(!is.na(traitSource)) %>%
+  group_by(species) %>%
+  mutate(rn=1:n()) %>%
+  select(species, rn, Tpref, verbatimLocality, traitSource)
+intra.traits
+
+intra.res %>%
+  left_join(intra.traits, by=c('species','rn','loc'='verbatimLocality')) %>%
+  select(species, rowid, WT_ptmin, WT_min50, WT_min25, Tpref, rn, traitSource, loc) %>%
+  group_by(species, rowid) %>%
+  pivot_longer(cols=c('WT_ptmin','WT_min25','WT_min50')) %>%
+  group_by(species, rowid, name) %>%
+  arrange(value) %>%
+  mutate(dif=lead(value, 1)-value, 
+         sp_in=paste(species, rn),
+         wt.f=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                     labels=c('minimum','25th quartile','median'))) %>%
+  filter(!is.na(dif)) %>%
+  ggplot()+
+  geom_boxplot(aes(x=as.character(Tpref), y=dif))+
+  facet_grid(wt.f~species, scales='free')+ 
+  scale_y_continuous('Deviation from lowest WT estimate')+
+  scale_x_discrete('Tpref value')+
+  theme_classic()+
+  theme(strip.text.x = element_text(face='italic'))
+ggsave('results/FigS2_6_intraspecific_trait_deviation.jpg',
+       width=6.5, height=6)
+```
+
+```{r}
+intra.mod.data<-intra.res %>%
+  left_join(intra.traits, by=c('species','rn','loc'='verbatimLocality')) %>%
+  select(species, rowid, WT_ptmin, WT_min50, WT_min25, Tpref, rn, traitSource, loc, lat) %>%
+  mutate(sp_in=paste(species, rn))
+
+all.intra.mod<-lm(WT_min25~lat:sp_in + sp_in +0, data=intra.mod.data)
+intra.mod.out<-summary(all.intra.mod)
+intra.traits %>%
+  filter(!is.na(verbatimLocality)) %>%
+  ungroup() %>%
+  bind_cols(intra.mod.out$coefficients[grepl('lat', rownames(intra.mod.out$coefficients)),]) %>%
+  select(-rn)  %>%
+  mutate(across(where(is.numeric), ~round(.x, digits=3))) %>%
+  write.csv('results/intraspecific_dif_coeffs.csv', row.names = F)
+```
+
+Below is a for loop to investigates species specific comparisons in differences among MNMs with different traits. 
+
+```{r}
+for(sp in unique(intra.mod.data$species)[1]){
+  for(quant in 'WT_min25'){
+    imdf<-intra.mod.data %>%
+      rename(QT=all_of(quant)) %>%
+      filter(species == sp)
+    int.mod<-lm(QT~lat:sp_in + sp_in + 0, data=imdf)
+summary(int.mod)
+i.est<-emtrends(int.mod, 'sp_in', var='lat')
+i.com.res<-pairs(i.est) %>% as_tibble() %>%
+  mutate(quant) %>%
+  select(quant, contrast, p.value, everything())
+print(i.com.res %>% filter(p.value < 0.06))
+}}
+```
 
 Below is code to run a phylogenetically informed linear regression. It needs to be run on the super computer and generally does not return different results than the model created above.
 
@@ -537,7 +604,7 @@ end.time-st.time
 phlo.mod
 ```
 
-And then I output the data for use in teh intraspecific comparison Rmd. 
+And then I output the data for use in the intraspecific comparison Rmd. 
 
 ```{r}
   mod.out.df<-mod.sum$coefficients[,-c(3,4)] %>% as_tibble() %>%
@@ -549,14 +616,14 @@ And then I output the data for use in teh intraspecific comparison Rmd.
     pivot_wider(names_from=type, values_from=c(Estimate, `Std. Error`))
 # output this data
 ect.df %>% group_by(species) %>% 
-  summarize(medWT=median(WT_ptmin),
-            WTmin2=quantile(WT_ptmin, .025),
-            WTmin97=quantile(WT_ptmin, .975),
-            medWT25=median(WT_min25),
-            WTmin225=quantile(WT_min25, .025),
-            WTmin9725=quantile(WT_min25, .975),
-            nRows=n()) %>%
-  left_join(mod.out.df, by='species') %>%
-  write.csv('results/pt_wtmin_coeff_sum.csv', row.names = F)
+   pivot_longer(cols=c('WT_min25','WT_ptmin', 'WT_min50')) %>%
+  mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                     labels=c('minimum','25th quartile','median'))) %>%
+  group_by(species, nm.F) %>%
+  summarize(medWT=median(value),
+            WTmin2=quantile(value, .025),
+            WTmin97=quantile(value, .975),
+            nRows=n(), .groups='drop') %>%
+  write.csv('results/pt_wtmin_sum.csv', row.names = F)
 
 ```

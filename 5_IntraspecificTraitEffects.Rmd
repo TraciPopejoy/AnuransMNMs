@@ -8,21 +8,21 @@ output: pdf_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+tmplab<-function(x){paste0(x, '°C')}
+latlab<-function(x){paste0(x, '° N')}
 ```
 
-## R Markdown
+# Investigate how traits affect our understanding of warming tolerance
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Using either the least sensitive or most sensitive traits, I build "trait monsters", or species with artificial combinations of traits, to investigate the boundaries of warming tolerance built using MNMs. These trait monsters represent fake animals that have artificial combinations of traits but might represent our estimates of the warming tolerance of the least sensitive animal and the warming tolerance of the most sensitive animal. 
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
+```{r load data}
 in.traits<-read.csv('input_data/intraspecific_variation_subset_APPENDIX.csv')
 in.ecto<-read.csv('intermediate_results/intra_summarized_bodytemps_230127.csv')
 in.pts<-read.csv('intermediate_results/intra_microclimate_info_230127.csv')
 pts<-read.csv('intermediate_results/points_ran_2023-01-10.csv') 
-pts.res<-read.csv('results/pt_wtmin_coeff_sum.csv')
-head(in.ecto)
+pts.res<-read.csv('results/pt_wtmin_sum.csv')
+#sample size possible
 pts_poss<-pts %>% select(X, Y, rowid, mnm_spp)%>%
   separate(mnm_spp, into=paste0('sp', 1:13), sep=', ') %>%
   pivot_longer(starts_with('sp')) %>%
@@ -32,6 +32,7 @@ pts_poss<-pts %>% select(X, Y, rowid, mnm_spp)%>%
   count(value)
 ```
 
+I ran these trait monsters for a subset of all possible points. Below describes how well the entire occupied grid was sampled. 
 
 ```{r}
 in.ecto %>%
@@ -44,8 +45,8 @@ in.ecto %>%
   left_join(pts_poss %>% rename(species=value, n_possible=n), 
             by='species') %>%
   mutate(per.pts=round(n/n_possible*100, 2))
-
 ```
+
 
 ```{r}
 ss.comp<-in.ecto %>%
@@ -53,28 +54,25 @@ ss.comp<-in.ecto %>%
   left_join(in.pts, by='rowid') %>%
   distinct(species, rowid, lat, src, .keep_all = T) %>%
   mutate(nsp=paste(src, species))
-ss.comp %>%
-  pivot_longer(cols=c('WT_min25','WT_ptmin')) %>%
-  ggplot()+
-  geom_hline(yintercept=0, color='grey')+
-  geom_point(aes(x=lat, y=value, color=src), alpha=0.02)+
-  stat_smooth(aes(x=lat, y=))
-  facet_grid(species~name)+
-  theme_classic()
 ```
+
+We can recreate Figure 1 in the manuscript but also plot the sensitive and super trait monsters, when available. 
 
 ```{r}
 # rank wt
 wtord <- pts.res %>% group_by(species) %>% 
   arrange(medWT) %>% pull(species)
-library(cowplot)
-wtmin.plt<-ss.comp %>%
-   group_by(species, src) %>% 
-  summarize(medWT=median(WT_ptmin),
-            WTmin2=quantile(WT_ptmin, .025),
-            WTmin97=quantile(WT_ptmin, .975),
-            nRows=n(), .groups='drop') %>%
+
+ss.comp %>%
+   pivot_longer(cols=c('WT_min25','WT_ptmin', 'WT_min50')) %>%
+  mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                     labels=c('minimum','25th quartile','median'))) %>%
+   group_by(species, src, nm.F) %>% 
+  summarize(medWT=median(value),
+            WTmin2=quantile(value, .025),
+            WTmin97=quantile(value, .975), .groups='drop') %>%
   bind_rows(pts.res %>% mutate(src='interspecific')) %>%
+  mutate(nm.F=factor(nm.F, levels=c('minimum','25th quartile','median'))) %>%
   mutate(spF=factor(species, levels=rev(wtord))) %>%
   ggplot()+
   geom_hline(yintercept=0, linetype='dashed', color='grey')+
@@ -90,36 +88,13 @@ wtmin.plt<-ss.comp %>%
         legend.text = element_text(size=8),
         legend.title = element_text(size=8),
         legend.position='bottom')+
-  coord_flip()
-src.legend<-get_legend(wtmin.plt)
-plot_grid(
-  plot_grid(wtmin.plt+theme(legend.position = 'none'),
-          ss.comp %>%
-   group_by(species, src) %>% 
-  summarize(medWT25=median(WT_min25),
-            WTmin225=quantile(WT_min25, .025),
-            WTmin9725=quantile(WT_min25, .975),
-            nRows=n(), .groups='drop') %>%
-  bind_rows(pts.res %>% mutate(src='interspecific')) %>%
-  mutate(spF=factor(species, levels=rev(wtord))) %>%
-  ggplot()+
-  geom_hline(yintercept=0, linetype='dashed', color='grey')+
-  geom_linerange(aes(x=spF, ymin=WTmin225, ymax=WTmin9725, color=src),
-             position=position_dodge(width=.5))+
-  geom_point(aes(x=spF, y=medWT25, color=src), size=1.7,
-             position=position_dodge(width=.5))+
-  scale_y_continuous('Minimum Warming Tolerance', labels = tmplab)+
-  scale_color_manual('Trait Type', values=c('black','blue','red'))+
-  theme_classic()+
-  theme(axis.title.y=element_blank(),
-        axis.text.y=element_blank(),
-        legend.text = element_text(size=8),
-        legend.title = element_text(size=8),
-        legend.position='none')+
-  coord_flip(), labels='AUTO', rel_widths=c(.65, .35), align='h'),
-  src.legend, rel_heights = c(.99,.1), ncol=1)
+  coord_flip()+
+  facet_grid(~nm.F)
 ggsave('results/FigS3_1_rankwarmingtolerance.jpg', width=6.5, height=4)
+
 ```
+
+Below is code to compare the relationship between warming tolerance and latitude between trait monsters of the same species. 
 
 ```{r}
 library(lme4)
@@ -134,13 +109,16 @@ ggplot(wtmin.pred)+
   theme(legend.position='bottom')
 ```
 
+And then we can look to see how the relationship between warming tolerance and latitude changes between the sensitive and super trait monsters. 
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+ss.comp %>%
+  pivot_longer(cols=c('WT_min25','WT_ptmin', 'WT_min50')) %>%
+  mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                     labels=c('minimum','25th quartile','median'))) %>%
+  ggplot()+
+  geom_hline(yintercept=0, color='grey')+
+  geom_smooth(aes(x=lat, y=value, color=src), method='lm',formulat='y~x')+
+  facet_grid(nm.F~species)+
+  theme_classic()
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
