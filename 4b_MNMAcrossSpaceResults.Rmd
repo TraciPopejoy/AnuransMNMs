@@ -66,23 +66,26 @@ micro_out %>%
 Below creates Figure 1, which plots the intraspecific traits available for CTmax, Tpref and Tmerge for our 13 species. It give the audience and idea of both intra and interspecific trait variation.
 
 ```{r trait scatter plot, echo=F, eval=F}
-read.csv('intermediate_results/regional_interspecific_traits.csv') %>%
+traits.df<-read.csv('input_data/intraspecific_variation_subset.csv')
+read.csv('intermediate_results/regional_interspecific_traits.csv') %>% 
   filter(species %in% mnm_spp, lifeStage %in% c('adult','unknown'),
          traitName %in% c('CTmax','Tmerge','Tpref')) %>%
   select(species, traitName, traitValue) %>%
   mutate(type=ifelse(species %in% c('Acris blanchardi','Anaxyrus americanus',
-                                    'Pseudacris crucifer') &
+                                    'Pseudacris crucifer', 'Lithobates clamitans') &
                        traitName == 'Tpref', 'intraspecific\ncomparison',
                      'available'), 
          traitValue=as.numeric(traitValue)) %>%
-  bind_rows(traits.df %>% filter(species %in% mnm_spp) %>%
-  select(species, CTmax, Tpref, Tmerge) %>% 
-    pivot_longer(-species, names_to='traitName', values_to = 'traitValue') %>%
+  bind_rows(read.csv('input_data/MNM_traits_SEspp_011923.csv') %>% filter(species %in% mnm_spp) %>%
+              select(species, CTmax, Tpref, Tmerge) %>% 
+              pivot_longer(-species, names_to='traitName', values_to = 'traitValue') %>%
     mutate(type='interspecific\ncomparison')) %>%
   mutate(typeF=factor(type, levels=c('available','intraspecific\ncomparison',
-                                     'interspecific\ncomparison'))) %>%
+                                     'interspecific\ncomparison')),
+         spF = factor(species, levels=rev(mnm_spp[order(mnm_spp)]))) %>% 
+  distinct(species, traitValue, typeF, .keep_all=T) %>% #View()
   ggplot()+
-  geom_point(aes(y=species, x=traitValue, shape=typeF))+
+  geom_point(aes(y=spF, x=traitValue, shape=typeF))+
   facet_wrap(~traitName, scales='free_x')+
   scale_x_continuous('Trait Value', labels=tmplab)+
   scale_shape_manual('Trait Use', values=c(3,4,16))+
@@ -231,7 +234,7 @@ ect.df %>%
   geom_point(aes(x=spF, y=medWT, shape=nmF),
              position=position_dodge(width=.4))+
   draw_plot(se_inset, x=1, y=-5, scale=10)+
-  scale_y_continuous('Minimum Warming Tolerance', labels = tmplab)+
+  scale_y_continuous('Minimum warming tolerance', labels = tmplab)+
   scale_size('Quantification')+
   theme_classic()+coord_flip()+
   theme(axis.title.y=element_blank(),
@@ -255,7 +258,7 @@ ggplot()+
         legend.text = element_text(size=7),
         legend.title = element_text(size=7),
         axis.text.x = element_text(size=8, angle=45, hjust=1))+
-  scale_fill_gradient2('Relative\nTrait\nValue'),
+  scale_fill_gradient2('Relative\ntrait\nvalue'),
 rel_widths = c(.7,.3), align = 'h')
 ggsave('results/Fig2_fancy_rank_thermalsensitivity_all.jpg', width=6, height=4)
 ```
@@ -372,6 +375,17 @@ kable(pdist %>%
   col.names=c('Species', '% distribution <2', '% distribution < 0', 'n points <0'), digits=1)
 ```
 
+```{r}
+pdist %>% pull(pdis_b0) %>% summary()
+pdist %>% filter(pdis_b0 == 0 | pdis_b0 == 100)
+pdist %>% filter(pdis_b0 != 0) %>% arrange(pdis_b0)
+cor(pdist$pdis_b0, pdist$pdis_b2, method='spearman')
+pdist %>% select(species, starts_with('pdis')) %>%
+  filter(pdis_b0 !=0) %>%
+  mutate(across(where(is.numeric), rank)) %>%
+  arrange(pdis_b0)
+```
+
 # Warming Tolerance across latitude
 
 We then investigate if and how species warming tolerance changes across a latitudinal gradient. The latitudinal gradient represents a temperature gradient, along with other abiotic gradients, that could affect species warming tolerances. 
@@ -418,10 +432,10 @@ for(quant in c('WT_ptmin','WT_min25','WT_min50')){
                      values=c(met.brewer('Renoir')[1:6], 'lightgrey', met.brewer('Renoir')[7:12]),
                      aesthetics = c('fill','color')) +
     scale_linetype_manual('species', values=c(1,2,1,2,1,2,1,2,1,2,1,2,1))+
-    scale_y_continuous(paste0(case_when(grepl('tmin', quant)~'minimum',
-                                        grepl('n25', quant)~'25th quantile',
-                                        grepl('n50',quant)~'median'), 
-                              ' Daily Min. Warming Tolerance'), labels = tmplab)+
+    scale_y_continuous(paste0(case_when(grepl('tmin', quant)~'Minimum',
+                                        grepl('n25', quant)~'Hottest quarter',
+                                        grepl('n50',quant)~'Median'), 
+                              ' daily min. warming tolerance'), labels = tmplab)+
     scale_x_continuous('Latitude', labels=latlab, expand=c(0.01,0.01))+
     theme_classic()+
   theme(axis.text.x=element_text(size=8),
@@ -458,6 +472,22 @@ plot_grid(plot_grid(all.spp.p+theme(legend.position='none'), intrawt.p, labels='
           lat.leg, rel_heights = c(.80,.20), ncol=1)
 ggsave(paste0('results/Fig3_', quant,'_lat.jpg'), width=6.5, height=5)
 }
+```
+
+
+```{r }
+#c('WT_ptmin','WT_min25','WT_min50')
+mod.min<-lm(WT_ptmin~lat:species + species + 0, data=ect.df)
+mod.25<-lm(WT_min25~lat:species + species + 0, data=ect.df)
+mod.50<-lm(WT_min50~lat:species + species + 0, data=ect.df)
+plot(mod.min)
+plot(mod.25)
+plot(mod.50)
+summary(mod.min)
+summary(mod.25)
+summary(mod.50)
+deviance(mod.min)
+extractAIC(mod.min)
 ```
 
 ```{r lin reg resul, echo=F}
@@ -627,3 +657,26 @@ ect.df %>% group_by(species) %>%
   write.csv('results/pt_wtmin_sum.csv', row.names = F)
 
 ```
+
+# quick investigation of longitudinal patterns of warming tolerance
+
+```{r}
+names(ect.df)
+mod.lngmin<-lm(WT_ptmin~long:species + species + 0, data=ect.df)
+summary(mod.lngmin)
+
+mod.lng25<-lm(WT_min25~long:species + species + 0, data=ect.df)
+summary(mod.lng25)
+```
+
+```{r}
+ect.df %>%
+  select(species, long, WT_ptmin, WT_min25) %>%
+  pivot_longer(-c(species, long)) %>%
+  ggplot()+
+  geom_smooth(aes(x=long, y=value, color=species), method='lm') +
+  facet_wrap(~name)
+```
+
+
+

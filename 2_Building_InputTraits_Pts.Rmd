@@ -55,7 +55,8 @@ To improve the fit of this imputation, for our focal species, we are recalculati
 
 ```{r}
 # pull in the USGS data release full database
-new_trait_mean<-read.csv('G:/Shared drives/GCC Vulnerability Scaling Project/3_Physiological Trait Database/Data Release/ATraiU2_full_2022SEPT.csv') %>% 
+new_trait_mean<-#read.csv('G:/Shared drives/GCC Vulnerability Scaling Project/3_Physiological Trait Database/Data Release/ATraiU2_full_2022SEPT.csv') %>% 
+  read.csv('C:/Users/Owner/Downloads/TRAD_full_2022SEPT.csv') %>%
   filter(species %in% focal_spp, #only species in our species list
          lifeStage %in% c('adult','unknown'), # only adults
          traitName != 'Activity', # activity is categorical and can't be inputed using the method we want
@@ -183,9 +184,9 @@ rownames(dist.mat)<-usa_traits %>% filter(!is.na(n_traits), !(ID %in% se$ID)) %>
 rowMeans(dist.mat)[rowMeans(dist.mat)>1000]
 ```
 
-## Identify which species to use to investigate intraspecific trait variation 
+## Identify which species to use to investigate intraspecific trait variation
 
-[still need to describe this decision process]
+Using the code below, we identified Tpref as a way to investigate intraspecific trait variation's effect on MNMs. Both Tmerge, Tpref and CTmax had some multiple recorded values for species in our species list. Of the traits we varied in our mechanistic niche model, Peterson and Gade (2017) found that optimal temperature had the largest effect on MNM outputs and it does not directly affect the interpretation of warming tolerance. Thus, we chose four species to vary Tpref (values observed from the literature) in our MNM models. 
 
 ```{r explore multiple trait avail}
 trait_filt %>% filter(traitName %in% c('CTmax','Tpref','Tmerge')) %>%
@@ -322,7 +323,7 @@ trait.df<-trait_used %>%
 #head(trait.df)
 ```
 ```{r plot the phylo tree, echo=F, warning=F, message=F}
-trait_tree<-left_join(tree.pruned, trait.df, by='node')
+trait_tree<-Rphylopars::left_join(tree.pruned, trait.df, by='node')
 ggtree(trait_tree, aes(color=category, label=tree.lab), size=3)+ 
   geom_tiplab(as_ylab=T)
 ```
@@ -367,6 +368,42 @@ kable(data.frame(model=c('lambda','Brownian motion','OU'),
 ```{r}
 summary(p_OU)
 ```
+
+Reviewer requested some test of imputation consistency. 
+```{r phyloreg loo}
+# Code from https://github.com/ericgoolsby/Rphylopars/issues/51
+
+# imputed_ind = individual-level imputations
+# imputed_sp = species-level imputations
+imputed_sp <- trait_data <- data.frame(trait.mat)
+imputed_sp[,-1] <- NA
+for(i in 1:nrow(trait_data))
+{
+  for(j in c(1:4, 8))
+  {
+    temp_trait_data <- trait_data
+    temp_trait_data[i,j+1] <- NA
+    p_temp <- phylopars(trait_data = temp_trait_data,
+                        tree = force.ultrametric(tree.pruned),
+                  model='OU', phylocov_fixed = p_OU$pars$phylocov)
+
+    imputed_sp[i,j+1] <- p_temp$anc_recon[trait_data$species[i],j]
+  }
+}
+
+sp_mean_abs_error <- colMeans(imputed_sp[,-1] - trait_data[,-1],na.rm=TRUE)
+sp_mean_sq_error <- colMeans((imputed_sp[,-1] - trait_data[,-1])^2,na.rm=TRUE)
+
+data.frame(traits=colnames(trait_data)[-1],
+          "sp bias"=round(sp_mean_abs_error,3),
+          "sp error" = round(sp_mean_sq_error,3),
+          n = colSums(!is.na(trait_data[,-1])), 
+          minimum=sapply(trait_data[,-1], min, na.rm=T),
+          maximum=sapply(trait_data[,-1], max, na.rm=T))
+
+imputed_sp[,2] - trait_data[,2]
+```
+
 
 ```{r results graph,  fig.height=4, echo=F}
 #results!

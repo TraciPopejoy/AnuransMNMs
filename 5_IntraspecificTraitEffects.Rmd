@@ -22,6 +22,11 @@ in.ecto<-read.csv('intermediate_results/intra_summarized_bodytemps_230127.csv')
 in.pts<-read.csv('intermediate_results/intra_microclimate_info_230127.csv')
 pts<-read.csv('intermediate_results/points_ran_2023-01-10.csv') 
 pts.res<-read.csv('results/pt_wtmin_sum.csv')
+mnm_spp <- c('Lithobates catesbeianus', 'Lithobates clamitans', 'Anaxyrus americanus',
+             'Lithobates sylvaticus', 'Pseudacris crucifer', 'Dryophytes versicolor', 
+             'Acris blanchardi', 'Dryophytes chrysoscelis', 'Lithobates palustris', 
+             'Anaxyrus fowleri', 'Scaphiopus holbrookii', 'Gastrophryne carolinensis',
+             'Lithobates areolatus')
 #sample size possible
 pts_poss<-pts %>% select(X, Y, rowid, mnm_spp)%>%
   separate(mnm_spp, into=paste0('sp', 1:13), sep=', ') %>%
@@ -47,6 +52,12 @@ in.ecto %>%
   mutate(per.pts=round(n/n_possible*100, 2))
 ```
 
+```{r}
+in.ecto %>% distinct(species, rn, loc, src) %>%
+  filter(src != 'sensitive' & src != 'super') %>%
+  group_by(species) %>% count()
+```
+
 
 ```{r}
 ss.comp<-in.ecto %>%
@@ -54,13 +65,15 @@ ss.comp<-in.ecto %>%
   left_join(in.pts, by='rowid') %>%
   distinct(species, rowid, lat, src, .keep_all = T) %>%
   mutate(nsp=paste(src, species))
+ss.comp %>% count(species)
 ```
 
 We can recreate Figure 1 in the manuscript but also plot the sensitive and super trait monsters, when available. 
 
 ```{r}
 # rank wt
-wtord <- pts.res %>% group_by(species) %>% 
+wtord <- pts.res %>% 
+  filter(species %in% mnm_spp, nm.F == 'minimum') %>%
   arrange(medWT) %>% pull(species)
 
 ss.comp %>%
@@ -72,7 +85,8 @@ ss.comp %>%
             WTmin2=quantile(value, .025),
             WTmin97=quantile(value, .975), .groups='drop') %>%
   bind_rows(pts.res %>% mutate(src='interspecific')) %>%
-  mutate(nm.F=factor(nm.F, levels=c('minimum','25th quartile','median'))) %>%
+  mutate(nm.F=factor(nm.F, levels=c('minimum','25th quartile','median'),
+                     labels=c('minimum','hottest quarter', 'median'))) %>%
   mutate(spF=factor(species, levels=rev(wtord))) %>%
   ggplot()+
   geom_hline(yintercept=0, linetype='dashed', color='grey')+
@@ -80,19 +94,50 @@ ss.comp %>%
              position=position_dodge(width=.5))+
   geom_point(aes(x=spF, y=medWT, color=src), size=1.7,
              position=position_dodge(width=.5))+
-  scale_y_continuous('Minimum Warming Tolerance', labels = tmplab)+
-  scale_color_manual('Trait Type', values=c('black','blue','red'))+
+  scale_y_continuous('Daily minimum warming tolerance', labels = tmplab)+
+  scale_color_manual('Trait type',
+                     labels=c('interspecific', 'most\nsensitive','least\nsensitive'), 
+                     values=c('black','blue','red'))+
   theme_classic()+
   theme(axis.title.y=element_blank(),
         axis.text.y=element_text(face='italic'),
         legend.text = element_text(size=8),
         legend.title = element_text(size=8),
-        legend.position='bottom')+
+        strip.background=element_blank(),
+        legend.position='bottom',
+        legend.margin=margin(t=-8))+
   coord_flip()+
   facet_grid(~nm.F)
-ggsave('results/FigS3_1_rankwarmingtolerance.jpg', width=6.5, height=4)
+ggsave('results/FigS3_2_rankwarmingtolerance.jpg', width=6.5, height=4)
 
 ```
+
+
+```{r}
+ss.comp %>% left_join(in.traits %>% group_by(species) %>% mutate(rn=1:n()) %>%
+              rename(src=traitSource), by=c('species','rn','src')) %>%
+  filter(species %in% c('Pseudacris crucifer','Anaxyrus americanus')) %>%
+  group_by(species, src) %>% slice(1) %>%
+  select(species, starts_with("WT"), src, Tpref, Mass, CTmax, CTmin, Tmerge)
+```
+```{r}
+ss.dif<-ss.comp %>% pivot_longer(cols=c('WT_min25','WT_ptmin', 'WT_min50')) %>%
+  mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                     labels=c('minimum','hottest quarter','median'))) %>%
+   group_by(species, src, nm.F) %>% 
+  summarize(medWT=median(value), .groups='drop') %>%
+  pivot_wider(names_from=src, values_from=medWT) %>% 
+  mutate(difWT=super-sensitive)
+ss.dif
+```
+
+```{r}
+ss.dif %>% group_by(nm.F) %>% summarize(nneg=sum(difWT < 0), npos=sum(difWT>0))
+ss.dif %>% filter(difWT < 0)
+ss.dif %>% group_by(nm.F) %>% 
+  summarize(med=median(difWT), minD=min(difWT), maxD=max(difWT))
+```
+
 
 Below is code to compare the relationship between warming tolerance and latitude between trait monsters of the same species. 
 
@@ -101,12 +146,6 @@ library(lme4)
 wtmin.mod<-lmer(WT_ptmin~lat:species + species + 0 + (1|src), data=ss.comp)
 (mod.sum<-summary(wtmin.mod))
 wtmin.pred<-cbind(ss.comp, fit=predict(wtmin.mod))
-ggplot(wtmin.pred)+
-  geom_point(aes(x=lat, y=WT_ptmin, color=src), alpha=0.02)+
-  geom_line(aes(x=lat, y=fit, color=src))+
-  facet_grid(~species)+
-  theme_classic()+
-  theme(legend.position='bottom')
 ```
 
 And then we can look to see how the relationship between warming tolerance and latitude changes between the sensitive and super trait monsters. 
@@ -115,10 +154,87 @@ And then we can look to see how the relationship between warming tolerance and l
 ss.comp %>%
   pivot_longer(cols=c('WT_min25','WT_ptmin', 'WT_min50')) %>%
   mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
-                     labels=c('minimum','25th quartile','median'))) %>%
+                     labels=c('minimum','hottest quarter','median')),
+         spV=gsub(' ', '\n', species)) %>%
   ggplot()+
   geom_hline(yintercept=0, color='grey')+
-  geom_smooth(aes(x=lat, y=value, color=src), method='lm',formulat='y~x')+
-  facet_grid(nm.F~species)+
-  theme_classic()
+  geom_smooth(aes(x=lat, y=value, color=src), method='lm',formula='y~x')+
+    scale_color_manual('Trait type', values=c('blue','red'), guide='none')+
+  scale_y_continuous('Daily minimum warming tolerance', label=tmplab)+
+scale_x_continuous('Latitude', label=latlab)+
+  facet_grid(spV~nm.F)+
+  theme_classic()+
+   theme(strip.background = element_blank(),
+         axis.text.x = element_text(size=8, angle=20),
+        strip.text.y = element_text(face='italic'))
+ggsave('results/FigS3_3_lat_supsen.jpg', width=6.5, height=6)
 ```
+
+
+```{r}
+in.ecto %>%
+  group_by(species, rn, src) %>%
+  select(species,rn, src, WT_ptmin, WT_min25, WT_min50) %>% 
+  pivot_longer(-c(species, rn, src)) %>%
+  group_by(species, rn, src, name) %>% 
+  summarize(medWT=median(value),
+            WTmin2=quantile(value, .025),
+            WTmin97=quantile(value, .975),
+            nRows=n(),.groups='drop') %>%
+  filter(src != 'sensitive' & src != 'super') %>%
+  left_join(in.traits %>% group_by(species) %>% mutate(rn=1:n()) %>%
+              rename(src=traitSource), by=c('species','rn','src')) %>%
+  mutate(nmF=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                    labels=c('minimum','25% quartile','median'))) %>%
+   ggplot()+
+  geom_hline(yintercept=0, linetype='dashed', color='grey')+
+  geom_linerange(aes(x=Tpref, ymin=WTmin2, ymax=WTmin97, group=nmF, color=species))+
+  geom_point(aes(x=Tpref, y=medWT, shape=nmF, color=species),size=2)+
+  scale_y_continuous('Daily Minimum Warming Tolerance', labels = tmplab)+
+  scale_shape(guide='none')+
+  scale_color_manual('Species', values = met.brewer('Hokusai3'))+
+  theme_classic()+coord_flip()+
+  theme(legend.text = element_text(size=8, face='italic'),
+        legend.title = element_text(size=8),
+        legend.position='bottom',
+        strip.background = element_blank(),
+        strip.text=element_text(size=10,),
+        legend.margin=margin(t=-10))+
+  facet_wrap(~nmF, scales='free')
+ggsave('results/FigS3_1_Tpref_res.jpg', width = 6.5, height=3)
+```
+
+```{r}
+in.ecto %>%
+  group_by(species, rn, src) %>%
+  select(species,rn, src, WT_ptmin, WT_min25, WT_min50) %>% 
+  pivot_longer(-c(species, rn, src)) %>%
+  group_by(species, rn, src, name) %>%
+   filter(src != 'sensitive' & src != 'super')  %>%
+left_join(in.traits %>% group_by(species) %>% mutate(rn=1:n()) %>%
+              rename(src=traitSource), by=c('species','rn','src')) %>%
+   mutate(nmF=factor(name, levels=c('WT_ptmin','WT_min25','WT_min50'),
+                    labels=c('minimum','hottest quarter','median')),
+          spV=gsub(' ', '\n', species)) %>%
+  ggplot()+geom_boxplot(aes(x=as.character(Tpref), y=value))+
+  scale_x_discrete('Preferred temperature', labels=tmplab)+
+  scale_y_continuous('Daily minimum warming tolerance', labels=tmplab)+
+  facet_grid(spV~nmF, scales='free')+
+  coord_flip()+
+  theme_classic()+
+  theme(strip.background = element_blank(),
+        strip.text.y = element_text(face='italic'))
+ggsave('results/FigureS3_1_boxplots.jpg', width=6.5, height=5)
+```
+
+
+```{r}
+an.df<-in.ecto %>%
+  select(species,rn, src, WT_ptmin, WT_min25, WT_min50) %>% 
+   filter(src != 'sensitive' & src != 'super') %>%
+  left_join(in.traits %>% group_by(species) %>% mutate(rn=1:n()) %>%
+              rename(src=traitSource), by=c('species','rn','src')) 
+car::Anova(lm(WT_ptmin~species*Tpref, data=an.df), type=3)
+```
+
+

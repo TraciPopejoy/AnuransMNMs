@@ -6,12 +6,10 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-library(tidyverse);library(sf);library(stars); library(maps); library(knitr)
+library(tidyverse);library(sf);library(stars); library(knitr)
 library(ggrepel); library(cowplot); library(ggspatial)
 library(NicheMapR)
-se<-st_as_sf(map('state',c('mississippi', 'georgia', 'florida', 'south carolina', 
-                           'north carolina', 'virginia', 'alabama', 'tennessee'), 
-                 fill=T, plot=F)) %>%
+se<-st_as_sf(readRDS('../CompareAnuranCCVA/spatial_extent.rds')) %>%
   st_make_valid() %>%
   st_transform(st_crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=37.5 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=km +no_defs"))
 library(MetBrewer)
@@ -43,11 +41,12 @@ I georeferenced verbatim localities for CTmax trait values from ATraiU-TaDS usin
 
 ```{r map of single points, warning=F, message=F, echo=F, fig.height=2.5, fig.width=4}
 pt_locs<-read.csv('input_data/point_locations.csv') # georeferenced CTmax localities
-traits<-read.csv('input_data/inputed_physio_traits.csv') # traits used throughout our analyses
+traits<-read.csv('input_data/inputed_physio_traits_011923.csv') # traits used throughout our analyses
 usa<-st_as_sf(map('usa','main', fill=T, plot=F))
 can<-st_as_sf(map('world','canada', fill=T, plot=F)) %>% st_transform(st_crs(usa))
 mex<-st_as_sf(map('world','mexico', fill=T, plot=F)) %>% st_transform(st_crs(usa))
 pt_locs %>% 
+  mutate(verbatimLocality=recode(verbatimLocality, 'Long Island, NY'='New York, Long Island')) %>%
   distinct(species, verbatimLocality, .keep_all = T) %>%
   st_as_sf(coords=c('longitude','latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
   mutate(pltsp=paste0(substr(species, 1,1), '. ', sub(".*? ", "", species))) %>%
@@ -67,6 +66,14 @@ pt_locs %>%
   annotation_north_arrow()+
   coord_sf(ylim=c(25,52), xlim=c(-125, -65))
 ggsave('results/FigS1_interspecific_trait_location.jpg', width=6.5, height=4)
+```
+
+```{r}
+pt_locs %>% 
+  mutate(verbatimLocality=recode(verbatimLocality, 'Long Island, NY'='New York, Long Island')) %>%
+  distinct(species, verbatimLocality, .keep_all = T) %>%
+  st_as_sf(coords=c('longitude','latitude'), crs=st_crs("+proj=longlat +ellps=WGS84 +datum=WGS84")) %>%
+  st_filter(st_transform(st_buffer(se,10), st_crs(.)))
 ```
 
 
@@ -267,7 +274,6 @@ pts_df<-pt_locs %>%
   group_by(species, latitude, longitude) %>%
    tally() %>% arrange(desc(n)) %>%
   rowid_to_column()
-
 ```
 
 ```{r}
@@ -300,39 +306,63 @@ We can compare interspecific thermal sensitivity by identifying the species with
 
 ```{r }
 pt.warmtol<-pt.bt.df %>%
-  group_by(species, rowid, CTmax) %>%
-  summarize(WTmin=min(WT_ptmin),
-            WTmax=max(WT_ptmin),
-            y.meanWTmin=mean(WT_ptmin),
-            y.meanWT25=mean(WT_min25),
-            y.sdWTmin=sd(WT_ptmin))
+  select(species, rowid, CTmax, year, WT_ptmin, WT_min25) %>%
+   pivot_longer(cols=c('WT_min25','WT_ptmin')) %>%
+  mutate(nm.F=factor(name, levels=c('WT_ptmin','WT_min25'),
+                     labels=c('minimum','hottest quarter'))) %>%
+  group_by(species, rowid, CTmax, nm.F) %>%
+  summarize(medWT=median(value),
+            WTmin2=quantile(value, .025),
+            WTmin97=quantile(value, .975), .groups='drop') 
 write.csv(pt.warmtol, 'intermediate_results/ptwarmtol_fig1adata.csv', row.names=F)
 ```
 
 ```{r}
-pt.WTord<-pt.warmtol %>% group_by(species) %>% summarize(mWTmin=mean(y.meanWTmin)) %>%
+pt.WTord<-pt.warmtol %>% group_by(species) %>% filter(nm.F=='minimum') %>%
+  summarize(mWTmin=mean(medWT)) %>%
   select(species, mWTmin) %>% arrange(mWTmin) %>% pull(species)
 pt.warmtol %>%
   mutate(spF=factor(species, levels=rev(pt.WTord))) %>%
   ggplot()+
-  geom_hline(yintercept=0, linetype='dashed', color='grey70')+
-  geom_linerange(aes(x=spF, ymin=WTmin,  ymax=WTmax, 
-                     y=y.meanWTmin, group=CTmax), 
-                 position=position_dodge(width=.8), color='lightgrey')+
-  geom_linerange(aes(x=spF, ymin=y.meanWTmin-y.sdWTmin,  ymax=y.meanWTmin+y.sdWTmin, 
-                     y=y.meanWTmin, group=CTmax), 
-                 position=position_dodge(width=.8))+
-  geom_point(aes(y=y.meanWTmin, x=spF, group=CTmax), position=position_dodge(width=.8))+
-  scale_x_discrete('Species')+
-  scale_y_continuous('Warming Tolerance', labels=tmplab)+
-  scale_shape_discrete('N\nPoints')+
+  geom_hline(yintercept=0, linetype='dashed')+
+  geom_linerange(aes(x=spF, ymin=WTmin2, ymax=WTmin97, color=CTmax, group=CTmax),
+             position=position_dodge(width=.7))+
+  geom_point(aes(x=spF, y=medWT, color=CTmax, group=CTmax), size=1.7,
+             position=position_dodge(width=.7))+
+  scale_y_continuous('Daily minimum warming tolerance', labels = tmplab)+
+  scale_color_gradient(low='lightgrey',high='black', labels = tmplab)+
   theme_classic()+
-  theme(axis.text.y=element_text(face='italic', size=9),
-        axis.title=element_text(size=9),
-        legend.position = c(.9,.77),
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_text(face='italic'),
         legend.text = element_text(size=8),
-        legend.title = element_text(size=8))+
-  coord_flip()
+        legend.title = element_text(size=10),
+        legend.position='bottom',
+        legend.margin=margin(t=-8))+
+  coord_flip()+
+  facet_grid(~nm.F, scales='free')
+ggsave('results/FigS1_2_wt_results.jpg', width=5.5, height=6)
+```
 
+
+```{r}
+sp.medWT<-pt.warmtol %>% select(species, rowid, CTmax, nm.F, medWT) %>% 
+  pivot_wider(names_from=nm.F, values_from=medWT) %>%
+  group_by(species) %>% summarize(across(c('minimum','hottest quarter'), median), .groups='drop') %>%
+  left_join(read.csv('results/pt_wtmin_sum.csv') %>% filter(nm.F != 'median') %>%
+              select(species, nm.F, medWT) %>% pivot_wider(names_from=nm.F, values_from=medWT) %>%
+              rename(reg_min=minimum, reg25=`25th quartile`), by='species')
+cor.test(sp.medWT$minimum, sp.medWT$reg_min, method='spearman')
+cor.test(sp.medWT$`25th quartile`, sp.medWT$reg25, method='spearman')
+sp.medWT %>% pivot_longer(-species) %>% mutate(type=factor(ifelse(grepl('hot',name)|grepl('25', name), 'hottest quarter', 'minimum'), levels=c('minimum','hottest quarter')),
+                                              area=ifelse(grepl('reg', name), 'regional','acclimatization-control')) %>% select(-name) %>% 
+  pivot_wider(names_from=area) %>%
+  ggplot()+
+  geom_point(aes(x=`acclimatization-control`, y=regional))+facet_wrap(~type, scales='free') + theme_classic()+
+  theme(panel.background = element_rect(color='black', fill=NA),
+        strip.background = element_blank(),
+        axis.text=element_text(size=8))+
+  scale_x_continuous(labels=tmplab, 
+                     breaks=seq(0,15,by=5))+scale_y_continuous(labels=tmplab,breaks=seq(0,15, 5))
+ggsave('results/FigS1_3_corWT.jpg', width=4, height=2)
 ```
 
