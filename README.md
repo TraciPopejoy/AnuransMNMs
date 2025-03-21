@@ -1,6 +1,8 @@
 # AnuransMNMs
 Traci P. DuBose Updated 01/27/2023
 
+DOI: 10.5281/zenodo.15064988
+
 -------------------------------
 
 # Purpose
